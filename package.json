@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-multi-rcon-hll",
-  "description": "一键管理服务器",
-  "version": "0.0.1",
+  "description": "一键管理多个hll服务器",
+  "version": "1.0.1",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
@@ -9,13 +9,16 @@
     "dist"
   ],
   "license": "MIT",
-  "scripts": {},
   "keywords": [
     "chatbot",
     "koishi",
     "plugin"
   ],
-  "devDependencies": {},
+  "homepage": "https://doc.flweb.cn/koi/rcon.html",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/WindyPear-Team/koishi-plugin-multi-rcon.git"
+  },
   "peerDependencies": {
     "koishi": "4.18.7"
   }
