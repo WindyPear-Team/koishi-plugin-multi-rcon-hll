@@ -17,7 +17,7 @@
   "homepage": "https://doc.flweb.cn/koi/rcon.html",
   "repository": {
     "type": "git",
-    "url": "https://github.com/WindyPear-Team/koishi-plugin-multi-rcon.git"
+    "url": "https://github.com/WindyPear-Team/koishi-plugin-multi-rcon-hll.git"
   },
   "peerDependencies": {
     "koishi": "4.18.7"
