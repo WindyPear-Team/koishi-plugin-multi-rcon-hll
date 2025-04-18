@@ -22,6 +22,7 @@ export interface ServerConfig {
   enableVip?: boolean;
   enableStats?: boolean;
   adminIds?: string[];
+  allowedGroups?: string[]; // 新增：允许使用的群组 ID 列表
 }
 
 export interface CustomCommand {
@@ -40,7 +41,8 @@ export const Config: Schema<Config> = Schema.object({
     enableMassMessage: Schema.boolean().default(false).description('启用 .群发 指令'),
     enableVip: Schema.boolean().default(false).description('启用 .VIP 指令'),
     enableStats: Schema.boolean().default(false).description('启用战绩统计'),
-    adminIds: Schema.array(Schema.string()).description('管理员 ID 列表')
+    adminIds: Schema.array(Schema.string()).description('管理员 ID 列表'),
+    allowedGroups: Schema.array(Schema.string()).description('允许使用的群组 ID 列表'), // 新增
   })).description('服务器配置'),
   customCommands: Schema.array(Schema.object({
     alias: Schema.string().required().description('自定义指令别名（如“踢出”）'),
@@ -242,6 +244,10 @@ export function apply(ctx: Context, config: Config) {
             baseCommand.usage('需要管理员权限才能使用')
 
         baseCommand.action(async ({ session }, inputCommand) => {
+                  // 群组检查
+                  if (server.allowedGroups && !server.allowedGroups.includes(session?.channelId!)) {
+                      return '本群组不允许使用此命令。';
+                  }
                     if (server.adminIds && !server.adminIds.includes(session?.userId!)) {
                         return '权限不足，只有管理员才能使用此命令。';
                     }
@@ -268,6 +274,10 @@ export function apply(ctx: Context, config: Config) {
         if (server.enableGamestateCommand) {
             baseCommand.subcommand('.查服')
               .action(async ({session}) => {
+                   // 群组检查
+                    if (server.allowedGroups && !server.allowedGroups.includes(session?.channelId!)) {
+                        return '本群组不允许使用此命令。';
+                    }
                   try {
                       const conn = new HLLConnection()
                       await conn.connect(server.host, server.port, server.password)
@@ -292,7 +302,6 @@ export function apply(ctx: Context, config: Config) {
                       const time = timeLine ? timeLine.substring(timeLine.indexOf(':') + 1).trim() : '未知';
                       const map = mapLine ? mapLine.substring(mapLine.indexOf(':') + 1).trim() : '未知';
                       const nextMap = nextMapLine ? nextMapLine.substring(nextMapLine.indexOf(':') + 1).trim() : '未知';
-                      
                       conn.close();
                       return `${serverName} 服务器状态：\n` +
                           `在线玩家: 同盟国: ${players.split('-')[0].replace('Allied:', '').trim()} - 轴心国: ${players.split('-')[1].replace('Axis:', '').trim()}\n` +
@@ -312,6 +321,10 @@ export function apply(ctx: Context, config: Config) {
       if (server.enableMassMessage) {
                 baseCommand.subcommand('.群发 <message:text>')
           .action(async ({ session }, message) => {
+                       // 群组检查
+                        if (server.allowedGroups && !server.allowedGroups.includes(session?.channelId!)) {
+                            return '本群组不允许使用此命令。';
+                        }
                       if (server.adminIds && !server.adminIds.includes(session?.userId!)) {
                           return '权限不足，只有管理员才能使用此命令。';
                       }
@@ -369,6 +382,10 @@ export function apply(ctx: Context, config: Config) {
       if (server.enableVip) {
           baseCommand.subcommand('.VIP <uid:string> <duration:string> [remark:string]')
               .action(async ({ session }, uid, durationStr, remark = '添加VIP') => {
+                   // 群组检查
+                   if (server.allowedGroups && !server.allowedGroups.includes(session?.channelId!)) {
+                       return '本群组不允许使用此命令。';
+                   }
                   if (server.adminIds && !server.adminIds.includes(session?.userId!)) {
                       return '权限不足，只有管理员才能使用此命令。';
                   }
@@ -405,6 +422,10 @@ export function apply(ctx: Context, config: Config) {
        if (server.enableStats) {
           baseCommand.subcommand('.查战绩 <uid:string>')
               .action(async ({ session }, uid) => {
+                    // 群组检查
+                    if (server.allowedGroups && !server.allowedGroups.includes(session?.channelId!)) {
+                        return '本群组不允许使用此命令。';
+                    }
                   try {
                       const [stats] = await ctx.database.get('player_stats', { uid, serverId: server.command });
                       if (!stats) {
@@ -425,6 +446,10 @@ export function apply(ctx: Context, config: Config) {
 
         baseCommand.subcommand('.清除战绩')
                .action(async ({ session }) => {
+                   // 群组检查
+                   if (server.allowedGroups && !server.allowedGroups.includes(session?.channelId!)) {
+                       return '本群组不允许使用此命令。';
+                   }
                     if (server.adminIds && !server.adminIds.includes(session?.userId!)) {
                         return '权限不足，只有管理员才能使用此命令。';
                     }
