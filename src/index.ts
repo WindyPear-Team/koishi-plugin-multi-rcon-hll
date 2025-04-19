@@ -351,7 +351,7 @@ export function apply(ctx: Context, config: Config) {
                 } finally {
                     if(conn) conn.close();
                 }
-            }).usage('管理员群发消息 (消息内容支持 Koishi 的 h 函数转义)');
+            }).usage('管理员群发消息');
     }
 
     if (server.enableVip) {
