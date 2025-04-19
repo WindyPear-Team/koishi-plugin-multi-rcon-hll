@@ -380,7 +380,7 @@ export function apply(ctx: Context, config: Config) {
         }
 
         // === 管理员管理子命令 ===
-        baseCommand.subcommand('.addadmin <targetUserId:string>', '添加下级管理员 (仅超管可用)')
+        baseCommand.subcommand('.添加管理员 <targetUserId:string>', '添加下级管理员 (仅超管可用)')
             .action(async ({ session }, targetUserId) => {
                 if (server.allowedGroups?.length && !server.allowedGroups.includes(session?.channelId!)) return '本群组不允许使用此服务器的命令。';
                 if (!await hasAdminPermission(ctx, session, config, 'super')) {
@@ -416,7 +416,7 @@ export function apply(ctx: Context, config: Config) {
                 }
             });
 
-        baseCommand.subcommand('.removeadmin <targetUserId:string>', '移除下级管理员 (仅超管可用)')
+        baseCommand.subcommand('.删除管理员 <targetUserId:string>', '移除下级管理员 (仅超管可用)')
             .action(async ({ session }, targetUserId) => {
                 if (server.allowedGroups?.length && !server.allowedGroups.includes(session?.channelId!)) return '本群组不允许使用此服务器的命令。';
                 if (!await hasAdminPermission(ctx, session, config, 'super')) {
@@ -444,7 +444,7 @@ export function apply(ctx: Context, config: Config) {
                 }
             });
 
-        baseCommand.subcommand('.listadmins', '列出所有管理员 (超管及下级管理员可用)')
+        baseCommand.subcommand('.列出管理员', '列出所有管理员 (超管及下级管理员可用)')
             .action(async ({ session }) => {
                  if (server.allowedGroups?.length && !server.allowedGroups.includes(session?.channelId!)) return '本群组不允许使用此服务器的命令。';
                  if (!await hasAdminPermission(ctx, session, config, 'sub')) {
@@ -633,8 +633,23 @@ export function apply(ctx: Context, config: Config) {
 
                     try {
                         const tableName = type === 'global' ? 'global_cdkeys' : 'server_cdkeys';
-                        await ctx.database.create(tableName, keysToCreate as any);
-                        return `成功生成 ${count} 个 ${type === 'global' ? '全局' : `服务器 ${server.name} (${server.command}) 专用`} 卡密 (时长: ${durationStr}, 备注: ${remark})：\n` + generatedKeys.join('\n');
+                        await ctx.database.upsert(tableName, keysToCreate as any);
+                        //return `成功生成 ${count} 个 ${type === 'global' ? '全局' : `服务器 ${server.name} (${server.command}) 专用`} 卡密 (时长: ${durationStr}, 备注: ${remark})：\n` + generatedKeys.join('\n');
+                        const successMessage = `成功生成 ${count} 个 ${type === 'global' ? '全局' : `服务器 ${server.name} (${server.command}) 专用`} 卡密 (时长: ${durationStr}, 备注: ${remark})。`;
+                        const privateMessageContent = `${successMessage}\n生成的卡密如下：\n${generatedKeys.join('\n')}`;
+
+                        try {
+                            // 尝试发送私聊消息给执行命令的管理员
+                            await session.bot.sendPrivateMessage(session.userId!, privateMessageContent);
+                             // 如果私聊发送成功，在原频道回复简短确认信息
+                            return `${successMessage} 卡密已私聊发送给您。`;
+                        } catch (privateMessageError) {
+                            // 如果私聊失败 (例如用户未启动私聊或机器人没有权限)
+                            ctx.logger.warn(`无法向用户 ${session.userId} 发送私聊卡密: ${privateMessageError.message}`);
+                            ctx.logger.info(privateMessageContent);
+                            // 在原频道回复完整信息作为备用方案
+                            return '发送卡密失败，请在控制台中查看完整卡密信息。';
+                        }
                     } catch (error) {
                         if (error.message.includes('UNIQUE')) {
                             return `[HLL] 错误 (${server.name})：生成卡密时遇到重复，请重试。`;
