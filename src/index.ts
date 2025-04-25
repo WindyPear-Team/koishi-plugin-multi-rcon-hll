@@ -311,7 +311,7 @@ export function apply(ctx: Context, config: Config) {
     // --- Server Specific Commands Loop ---
     config.servers.forEach((server) => {
 
-        const baseCommand = ctx.command(server.command)
+        const baseCommand = ctx.command(`${server.command} <command:text>`)
             .usage(`(${server.name}) 相关指令`);
 
         // Base RCON command action (requires Sub Admin)
