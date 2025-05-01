@@ -531,11 +531,12 @@ export function apply(ctx: Context, config: Config) {
                         });
                         let successCount = 0;
                         for (const uid of playerUids) {
-                            const sendMessageCommand = `Message ${uid} ${message}`; // 不再需要 escape? RCON 可能不需要
+                            const sendMessageCommand = `Message ${uid} ${message}`;
                             conn.send(sendMessageCommand);
                             await new Promise(resolve => setTimeout(resolve, 50));
                             await conn.receive();
                             successCount++;
+                            ctx.sleep(1000);
                         }
                         return `成功向 ${successCount} 位玩家发送消息(${server.name})。`;
                     } catch (error) {
