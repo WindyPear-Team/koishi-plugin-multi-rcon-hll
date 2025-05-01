@@ -526,7 +526,7 @@ export function apply(ctx: Context, config: Config) {
                             if (line === '') return;
                             const lineWithoutNumber = line.replace(/^\d+\s*/, '');
                             const regex = /(?:.*?):\s*([a-f0-9]{32}|765611\d{10,})/g;
-                            let match;
+                            let match: string[];
                             while ((match = regex.exec(lineWithoutNumber)) !== null) { if (match[1]) playerUids.push(match[1]); }
                         });
                         let successCount = 0;
@@ -536,7 +536,7 @@ export function apply(ctx: Context, config: Config) {
                             await new Promise(resolve => setTimeout(resolve, 50));
                             await conn.receive();
                             successCount++;
-                            ctx.sleep(1000);
+                            await ctx.sleep(1000);
                         }
                         return `成功向 ${successCount} 位玩家发送消息(${server.name})。`;
                     } catch (error) {
@@ -571,6 +571,23 @@ export function apply(ctx: Context, config: Config) {
                         if (conn) conn.close();
                     }
                 }).usage('添加VIP (格式: .VIP <UID> <时间> [备注]) (需要下级或以上管理员权限)');
+            baseCommand.subcommand('.恢复VIP')
+            .action(async ({ session }) => {
+                // 恢复数据库里面未到期的VIP
+                const conn = new HLLConnection();
+                const vipData = await ctx.database.get('vip_data', { expireAt: { $gt: new Date() } });
+                for (const data of vipData) {
+                    if (data.expireAt.getTime() < Date.now()) continue;
+                    try {
+                        await conn.connect(server.host, server.port, server.password);
+                        conn.send(`VipAdd ${data.uid} "${data.remark}"`);
+                        await conn.receive();
+                    } catch (error) {
+                        console.error(`[HLL] 错误 (${server.name})：${error.message}`);
+                    }
+                }
+                if (conn) conn.close();
+            })
         }
 
         // Stats commands (Uses global config.enableStats)
