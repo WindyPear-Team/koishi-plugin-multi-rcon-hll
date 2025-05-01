@@ -1,4 +1,4 @@
-import { Context, Schema, Session, Database } from 'koishi' // 移除 User，因为我们直接用 ID 操作
+import { Context, Schema, Session } from 'koishi'
 import { Socket } from 'net'
 import dayjs from 'dayjs';
 import { v4 as uuidv4 } from 'uuid';
@@ -7,33 +7,31 @@ export const name = 'multi-rcon-hll'
 export const reusable = true
 export const inject = ['database']
 
-// --- Configuration Interfaces (保持不变) ---
 export interface Config {
-  servers: ServerConfig[]
-  customCommands: CustomCommand[]
-  enableGamestateCommand?: boolean;
-  enableMassMessage?: boolean;
-  enableVip?: boolean;
-  enableStats?: boolean;
-  enableCdKeyRedemption?: boolean;
-  superAdminIds?: string[];
+    servers: ServerConfig[]
+    customCommands: CustomCommand[]
+    enableGamestateCommand?: boolean;
+    enableMassMessage?: boolean;
+    enableVip?: boolean;
+    enableStats?: boolean;
+    enableCdKeyRedemption?: boolean;
+    superAdminIds?: string[];
 }
 
 export interface ServerConfig {
-  name: string
-  command: string
-  host: string
-  port: number
-  password: string
-  allowedGroups?: string[];
+    name: string
+    command: string
+    host: string
+    port: number
+    password: string
+    allowedGroups?: string[];
 }
 
 export interface CustomCommand {
-  alias: string
-  command: string
+    alias: string
+    command: string
 }
 
-// --- Config Schema (保持不变) ---
 export const Config: Schema<Config> = Schema.intersect([
     Schema.object({
         superAdminIds: Schema.array(Schema.string()).description('超级管理员 ID 列表 (拥有所有权限，包括管理下级管理员)'),
@@ -59,50 +57,47 @@ export const Config: Schema<Config> = Schema.intersect([
     })
 ])
 
-
-// --- Database Table Interfaces (保持不变) ---
 export interface VipData {
-  id: number
-  uid: string
-  serverId: string
-  expireAt: Date
-  remark: string
+    id: number
+    uid: string
+    serverId: string
+    expireAt: Date
+    remark: string
 }
 
 export interface PlayerStats {
-  uid: string;
-  serverId: string;
-  playerName: string;
-  kills: number;
-  deaths: number;
-  teamKills: number;
-  lastUpdate: Date;
+    uid: string;
+    serverId: string;
+    playerName: string;
+    kills: number;
+    deaths: number;
+    teamKills: number;
+    lastUpdate: Date;
 }
 
 export interface GlobalCdKey {
-  id: number;
-  key: string;
-  duration: string;
-  remark: string;
-  isUsed: boolean;
-  usedByUid?: string;
-  usedAt?: Date;
-  createdAt: Date;
+    id: number;
+    key: string;
+    duration: string;
+    remark: string;
+    isUsed: boolean;
+    usedByUid?: string;
+    usedAt?: Date;
+    createdAt: Date;
 }
 
 export interface ServerCdKey {
-  id: number;
-  key: string;
-  serverId: string;
-  duration: string;
-  remark: string;
-  isUsed: boolean;
-  usedByUid?: string;
-  usedAt?: Date;
-  createdAt: Date;
+    id: number;
+    key: string;
+    serverId: string;
+    duration: string;
+    remark: string;
+    isUsed: boolean;
+    usedByUid?: string;
+    usedAt?: Date;
+    createdAt: Date;
 }
 
-// --- HllSubAdmin Table Interface (保持不变) ---
 export interface HllSubAdmin {
     userId: string;
     addedBy: string;
@@ -110,18 +105,16 @@ export interface HllSubAdmin {
 }
 
 declare module 'koishi' {
-  interface Tables {
-    vip_data: VipData,
-    player_stats: PlayerStats,
-    global_cdkeys: GlobalCdKey,
-    server_cdkeys: ServerCdKey,
-    hll_sub_admins: HllSubAdmin,
-  }
+    interface Tables {
+        vip_data: VipData,
+        player_stats: PlayerStats,
+        global_cdkeys: GlobalCdKey,
+        server_cdkeys: ServerCdKey,
+        hll_sub_admins: HllSubAdmin,
+    }
 }
 
-// --- HLLConnection Class (保持不变) ---
 class HLLConnection {
-// ... HLLConnection 代码 ...
     private socket: Socket
     private xorKey: Buffer | null = null
     private isConnected = false
@@ -201,16 +194,14 @@ class HLLConnection {
     }
 
     close() {
-        if(this.socket && !this.socket.destroyed){
-           this.socket.destroy()
+        if (this.socket && !this.socket.destroyed) {
+            this.socket.destroy()
         }
         this.isConnected = false
     }
 }
 
-// --- parseTime function (保持不变) ---
 function parseTime(timeStr: string): Date | null {
-// ... parseTime 代码 ...
     let totalSeconds = 0;
     let matched = false;
     const regex = /(\d+)([dmyhs])/g;
@@ -235,33 +226,50 @@ function parseTime(timeStr: string): Date | null {
     return futureDate.toDate();
 }
 
-// --- killRegex, teamKillRegex (保持不变) ---
+function parseMs(timeStr: string): number | null {
+    let totalSeconds = 0;
+    let matched = false;
+    const regex = /(\d+)([dmyhs])/g;
+    let match;
+    while ((match = regex.exec(timeStr)) !== null) {
+        matched = true;
+        const value = parseInt(match[1]);
+        if (isNaN(value) || value <= 0) return null;
+        const unit = match[2];
+        switch (unit) {
+            case 's': totalSeconds += value; break;
+            case 'h': totalSeconds += value * 3600; break;
+            case 'd': totalSeconds += value * 86400; break;
+            case 'm': totalSeconds += value * 2592000; break; // 30 days
+            case 'y': totalSeconds += value * 31536000; break; // 365 days
+            default: return null;
+        }
+    }
+    if (!matched) return null;
+    return totalSeconds * 1000;
+}
+
 const killRegex = /KILL: (.*)\((Allies|Axis)\/(.*?)\)\s*->\s*(.*)\((Allies|Axis)\/(.*?)\)\s*with\s*(.*)/;
 const teamKillRegex = /TEAM KILL: (.*)\((Allies|Axis)\/(.*?)\)\s*->\s*(.*)\((Allies|Axis)\/(.*?)\)\s*with\s*(.*)/;
 
 
-// --- hasAdminPermission Helper Function (保持不变) ---
 async function hasAdminPermission(
     ctx: Context,
     session: Session,
     config: Config,
     requiredLevel: 'super' | 'sub'
 ): Promise<boolean> {
-// ... hasAdminPermission 代码 ...
     const userId = session?.userId;
     if (!userId) return false; // No user ID, no permission
 
-    // Super Admins always have permission
     if (config.superAdminIds?.includes(userId)) {
         return true;
     }
 
-    // If only super admin level is required, return false now
     if (requiredLevel === 'super') {
         return false;
     }
 
-    // If sub admin level is required, check the database
     if (requiredLevel === 'sub') {
         const [subAdmin] = await ctx.database.get('hll_sub_admins', { userId: userId });
         return !!subAdmin; // Return true if subAdmin record exists
@@ -272,7 +280,6 @@ async function hasAdminPermission(
 
 export function apply(ctx: Context, config: Config) {
 
-    // --- Database Model Definitions (保持不变) ---
     ctx.model.extend('vip_data', {
         id: 'unsigned', uid: 'string', serverId: 'string',
         expireAt: 'timestamp', remark: 'string',
@@ -288,7 +295,7 @@ export function apply(ctx: Context, config: Config) {
         id: 'unsigned', key: 'string', duration: 'string',
         remark: 'string', isUsed: 'boolean', usedByUid: 'string',
         usedAt: 'timestamp', createdAt: 'timestamp',
-    }, { primary: 'id', autoInc: true,unique: ['key'], });
+    }, { primary: 'id', autoInc: true, unique: ['key'], });
 
     ctx.model.extend('server_cdkeys', {
         id: 'unsigned', key: 'string', serverId: 'string', duration: 'string',
@@ -300,27 +307,44 @@ export function apply(ctx: Context, config: Config) {
         userId: 'string',
         addedBy: 'string',
         addedAt: 'timestamp',
-    }, { primary: 'userId'});
+    }, { primary: 'userId' });
 
-    // --- Custom Command Map (保持不变) ---
     const commandMap = new Map<string, string>()
     config.customCommands.forEach(({ alias, command }) => {
         commandMap.set(alias, command)
     })
 
-    // --- Server Specific Commands Loop ---
     config.servers.forEach((server) => {
 
         const baseCommand = ctx.command(`${server.command} <command:text>`)
-            .usage(`(${server.name}) 相关指令`);
+            .usage(`(${server.name}) 相关指令`)
+            .option('time', '-t <time>', { fallback: '0' });
 
-        // Base RCON command action (requires Sub Admin)
-        baseCommand.action(async ({ session }, inputCommand) => {
-            // ... RCON 执行逻辑 (与之前版本一致) ...
+        baseCommand.action(async ({ session, options }, inputCommand) => {
             if (!inputCommand) return '请输入RCON指令。';
             if (server.allowedGroups?.length && !server.allowedGroups.includes(session?.channelId!)) return '本群组不允许使用此服务器的命令。';
             if (!await hasAdminPermission(ctx, session, config, 'sub')) return '权限不足。';
-
+            if (options.time && options.time !== '0') {
+                ctx.setTimeout(async () => {
+                    const conn = new HLLConnection()
+                    try {
+                        await conn.connect(server.host, server.port, server.password)
+                        const [firstWord, ...rest] = inputCommand.split(' ')
+                        const mappedCommand = commandMap.get(firstWord) || firstWord
+                        const finalCommand = [mappedCommand, ...rest].join(' ')
+                        conn.send(finalCommand)
+                        const response = await conn.receive()
+                        session.send(`[HLL] ${server.name} 响应：\n${response.toString()}`)
+                        return;
+                    } catch (error) {
+                        session.send(`[HLL] 错误 (${server.name})：${error.message}`)
+                        return;
+                    } finally {
+                        conn.close()
+                    }
+                }, parseMs(options.time))
+                return `已设置定时 ${options.time} 后执行 ${inputCommand} 。`;
+            }
             const conn = new HLLConnection()
             try {
                 await conn.connect(server.host, server.port, server.password)
@@ -336,47 +360,48 @@ export function apply(ctx: Context, config: Config) {
                 conn.close()
             }
         })
-        .usage('执行原始 RCON 指令 (需要下级或以上管理员权限)')
+            .usage('执行原始 RCON 指令 (需要下级或以上管理员权限)')
 
-        // .查服 (Uses global config.enableGamestateCommand)
         if (config.enableGamestateCommand) {
             baseCommand.subcommand('.查服')
-              .action(async ({session}) => {
-                  // ... 查服逻辑 (与之前版本一致) ...
-                  if (server.allowedGroups?.length && !server.allowedGroups.includes(session?.channelId!)) return '本群组不允许使用此命令。';
-                  let conn: HLLConnection | null = null;
-                  try {
-                      conn = new HLLConnection()
-                      await conn.connect(server.host, server.port, server.password)
-                      conn.send('get name')
-                      const serverName = (await conn.receive()).toString().trim();
-                      conn.send('get gamestate')
-                      const response = (await conn.receive()).toString();
-                      const lines = response.split('\n');
-                      const playersLine = lines.find(line => line.startsWith('Players:'));
-                      const scoreLine = lines.find(line => line.startsWith('Score:'));
-                      const timeLine = lines.find(line => line.startsWith('Remaining Time:'));
-                      const mapLine = lines.find(line => line.startsWith('Map:'));
-                      const nextMapLine = lines.find(line => line.startsWith('Next Map:'));
-                      const players = playersLine ? playersLine.substring(playersLine.indexOf(':') + 1).trim() : '?';
-                      const score = scoreLine ? scoreLine.substring(scoreLine.indexOf(':') + 1).trim() : '?';
-                      const time = timeLine ? timeLine.substring(timeLine.indexOf(':') + 1).trim() : '?';
-                      const map = mapLine ? mapLine.substring(mapLine.indexOf(':') + 1).trim() : '?';
-                      const nextMap = nextMapLine ? nextMapLine.substring(nextMapLine.indexOf(':') + 1).trim() : '?';
-                      const [, alliedPlayers = '?', axisPlayers = '?'] = players.match(/Allied:\s*(\d+).*Axis:\s*(\d+)/) || [];
-                      const [, alliedScore = '?', axisScore = '?'] = score.match(/Allied:\s*(\d+).*Axis:\s*(\d+)/) || [];
-                      return `${serverName} 服务器状态：\n` +
-                             `在线玩家: 同盟国: ${alliedPlayers} - 轴心国: ${axisPlayers}\n` +
-                             `比分: 同盟国: ${alliedScore} - 轴心国: ${axisScore}\n` +
-                             `剩余时间: ${time}\n` +
-                             `当前地图: ${map}\n` +
-                             `下一张地图: ${nextMap}`;
-                  } catch (error) {
-                      return `[HLL] 错误 (${server.name})：${error.message}`;
-                  } finally {
-                       if(conn) conn.close();
-                  }
-              }).usage('查询服务器状态 (所有用户)')
+                .action(async ({ session }) => {
+                    if (server.allowedGroups?.length && !server.allowedGroups.includes(session?.channelId!)) return '本群组不允许使用此命令。';
+                    let conn: HLLConnection | null = null;
+                    try {
+                        conn = new HLLConnection()
+                        await conn.connect(server.host, server.port, server.password)
+                        conn.send('Get PlayerIds')
+                        const playernum = (await conn.receive()).toString().split("	")[0];
+                        conn.send('get name')
+                        const serverName = (await conn.receive()).toString().trim();
+                        conn.send('get gamestate')
+                        const response = (await conn.receive()).toString();
+                        const lines = response.split('\n');
+                        const playersLine = lines.find(line => line.startsWith('Players:'));
+                        const scoreLine = lines.find(line => line.startsWith('Score:'));
+                        const timeLine = lines.find(line => line.startsWith('Remaining Time:'));
+                        const mapLine = lines.find(line => line.startsWith('Map:'));
+                        const nextMapLine = lines.find(line => line.startsWith('Next Map:'));
+                        const players = playersLine ? playersLine.substring(playersLine.indexOf(':') + 1).trim() : '?';
+                        const score = scoreLine ? scoreLine.substring(scoreLine.indexOf(':') + 1).trim() : '?';
+                        const time = timeLine ? timeLine.substring(timeLine.indexOf(':') + 1).trim() : '?';
+                        const map = mapLine ? mapLine.substring(mapLine.indexOf(':') + 1).trim() : '?';
+                        const nextMap = nextMapLine ? nextMapLine.substring(nextMapLine.indexOf(':') + 1).trim() : '?';
+                        const [, alliedPlayers = '?', axisPlayers = '?'] = players.match(/Allied:\s*(\d+).*Axis:\s*(\d+)/) || [];
+                        const [, alliedScore = '?', axisScore = '?'] = score.match(/Allied:\s*(\d+).*Axis:\s*(\d+)/) || [];
+                        return `${serverName} 服务器状态：\n` +
+                            `在线玩家: ${playernum}\n` +
+                            `阵营人数: 同盟国: ${alliedPlayers} - 轴心国: ${axisPlayers}\n` +
+                            `比分: 同盟国: ${alliedScore} - 轴心国: ${axisScore}\n` +
+                            `剩余时间: ${time}\n` +
+                            `当前地图: ${map}\n` +
+                            `下一张地图: ${nextMap}`;
+                    } catch (error) {
+                        return `[HLL] 错误 (${server.name})：${error.message}`;
+                    } finally {
+                        if (conn) conn.close();
+                    }
+                }).usage('查询服务器状态 (所有用户)')
         }
 
         // === 管理员管理子命令 ===
@@ -391,9 +416,9 @@ export function apply(ctx: Context, config: Config) {
                 // 尝试获取用户名以提供更好的反馈
                 let targetUserName = targetUserId;
                 try {
-                   const user = await session.bot.getUser(targetUserId);
-                   if (user?.name) targetUserName = user.name;
-                } catch {} // 忽略获取用户信息的错误
+                    const user = await session.bot.getUser(targetUserId);
+                    if (user?.name) targetUserName = user.name;
+                } catch { } // 忽略获取用户信息的错误
 
                 if (config.superAdminIds?.includes(targetUserId)) {
                     return `用户 ${targetUserName} (${targetUserId}) 已经是超级管理员。`;
@@ -422,14 +447,14 @@ export function apply(ctx: Context, config: Config) {
                 if (!await hasAdminPermission(ctx, session, config, 'super')) {
                     return '权限不足，只有超级管理员才能移除下级管理员。';
                 }
-                 if (!targetUserId) return '请输入要移除的用户ID。';
+                if (!targetUserId) return '请输入要移除的用户ID。';
 
                 // 尝试获取用户名
                 let targetUserName = targetUserId;
                 try {
                     const user = await session.bot.getUser(targetUserId);
                     if (user?.name) targetUserName = user.name;
-                } catch {}
+                } catch { }
 
                 try {
                     const result = await ctx.database.remove('hll_sub_admins', { userId: targetUserId });
@@ -446,10 +471,10 @@ export function apply(ctx: Context, config: Config) {
 
         baseCommand.subcommand('.列出管理员', '列出所有管理员 (超管及下级管理员可用)')
             .action(async ({ session }) => {
-                 if (server.allowedGroups?.length && !server.allowedGroups.includes(session?.channelId!)) return '本群组不允许使用此服务器的命令。';
-                 if (!await hasAdminPermission(ctx, session, config, 'sub')) {
+                if (server.allowedGroups?.length && !server.allowedGroups.includes(session?.channelId!)) return '本群组不允许使用此服务器的命令。';
+                if (!await hasAdminPermission(ctx, session, config, 'sub')) {
                     return '权限不足。';
-                 }
+                }
 
                 const superAdmins = config.superAdminIds || [];
                 const subAdmins = await ctx.database.get('hll_sub_admins', {});
@@ -457,9 +482,9 @@ export function apply(ctx: Context, config: Config) {
                 let response = '管理员列表：\n';
                 response += '--- 超级管理员 ---\n';
                 if (superAdmins.length > 0) {
-                     const names = await Promise.all(superAdmins.map(async id => {
-                         try { const user = await session.bot.getUser(id); return user?.name ? `${user.name} (${id})` : id; } catch { return id; }
-                     }));
+                    const names = await Promise.all(superAdmins.map(async id => {
+                        try { const user = await session.bot.getUser(id); return user?.name ? `${user.name} (${id})` : id; } catch { return id; }
+                    }));
                     response += names.join('\n');
                 } else {
                     response += '(无)\n';
@@ -467,7 +492,7 @@ export function apply(ctx: Context, config: Config) {
 
                 response += '\n--- 下级管理员 ---\n';
                 if (subAdmins.length > 0) {
-                      const names = await Promise.all(subAdmins.map(async admin => {
+                    const names = await Promise.all(subAdmins.map(async admin => {
                         try { const user = await session.bot.getUser(admin.userId); return user?.name ? `${user.name} (${admin.userId})` : admin.userId; } catch { return admin.userId; }
                     }));
                     response += names.join('\n');
@@ -486,8 +511,8 @@ export function apply(ctx: Context, config: Config) {
             baseCommand.subcommand('.群发 <message:text>')
                 .action(async ({ session }, message) => {
                     // ... 群发逻辑 (权限检查使用 hasAdminPermission) ...
-                     if (server.allowedGroups?.length && !server.allowedGroups.includes(session?.channelId!)) return '本群组不允许使用此命令。';
-                     if (!await hasAdminPermission(ctx, session, config, 'sub')) return '权限不足。';
+                    if (server.allowedGroups?.length && !server.allowedGroups.includes(session?.channelId!)) return '本群组不允许使用此命令。';
+                    if (!await hasAdminPermission(ctx, session, config, 'sub')) return '权限不足。';
                     let conn: HLLConnection | null = null;
                     try {
                         conn = new HLLConnection();
@@ -516,7 +541,7 @@ export function apply(ctx: Context, config: Config) {
                     } catch (error) {
                         return `[HLL] 错误 (${server.name})：${error.message}`;
                     } finally {
-                        if(conn) conn.close();
+                        if (conn) conn.close();
                     }
                 }).usage('群发消息 (需要下级或以上管理员权限)');
         }
@@ -542,50 +567,50 @@ export function apply(ctx: Context, config: Config) {
                     } catch (error) {
                         return `[HLL] 错误 (${server.name})：${error.message}`;
                     } finally {
-                        if(conn) conn.close();
+                        if (conn) conn.close();
                     }
                 }).usage('添加VIP (格式: .VIP <UID> <时间> [备注]) (需要下级或以上管理员权限)');
-         }
+        }
 
         // Stats commands (Uses global config.enableStats)
         if (config.enableStats) {
-             baseCommand.subcommand('.查战绩 <uid:string>')
+            baseCommand.subcommand('.查战绩 <uid:string>')
                 .action(async ({ session }, uid) => {
                     // ... 查战绩逻辑 ...
-                     if (server.allowedGroups?.length && !server.allowedGroups.includes(session?.channelId!)) return '本群组不允许使用此命令。';
+                    if (server.allowedGroups?.length && !server.allowedGroups.includes(session?.channelId!)) return '本群组不允许使用此命令。';
                     try {
                         const [stats] = await ctx.database.get('player_stats', { uid, serverId: server.command });
                         if (!stats) return `未找到玩家 UID ${uid} 在服务器 ${server.name} 的战绩信息。`;
                         const kdRatio = stats.deaths === 0 ? stats.kills.toFixed(2) : (stats.kills / stats.deaths).toFixed(2);
                         const lastUpdate = dayjs(stats.lastUpdate).format('YYYY年MM月DD日 HH:mm:ss');
                         return `玩家 ${stats.playerName} (UID: ${uid}) 在 ${server.name} 的战绩：\n` + // 不需要 escape playerName，因为数据库存的就是原始名
-                               `击杀总数：${stats.kills}\n` +
-                               `死亡总数：${stats.deaths}\n` +
-                               `TK总数：${stats.teamKills}\n` +
-                               `KD计算：${kdRatio}\n` +
-                               `统计至 ${lastUpdate}`;
+                            `击杀总数：${stats.kills}\n` +
+                            `死亡总数：${stats.deaths}\n` +
+                            `TK总数：${stats.teamKills}\n` +
+                            `KD计算：${kdRatio}\n` +
+                            `统计至 ${lastUpdate}`;
                     } catch (error) {
                         return `[HLL] 错误 (${server.name})：${error.message}`;
                     }
                 }).usage('查询玩家战绩 (所有用户)');
 
             baseCommand.subcommand('.清除战绩')
-                   .action(async ({ session }) => {
-                       // ... 清除战绩逻辑 (权限检查使用 hasAdminPermission) ...
-                       if (server.allowedGroups?.length && !server.allowedGroups.includes(session?.channelId!)) return '本群组不允许使用此命令。';
-                       if (!await hasAdminPermission(ctx, session, config, 'sub')) return '权限不足。';
-                        try {
-                            const result = await ctx.database.remove('player_stats', { serverId: server.command });
-                            return `已成功清除 ${server.name} (${server.command}) 服务器 ${result.removed} 条战绩数据。`;
-                        } catch (error) {
-                            return `[HLL] 错误 (${server.name})：${error.message}`;
-                        }
-                    }).usage('清除本服务器所有战绩 (需要下级或以上管理员权限)');
+                .action(async ({ session }) => {
+                    // ... 清除战绩逻辑 (权限检查使用 hasAdminPermission) ...
+                    if (server.allowedGroups?.length && !server.allowedGroups.includes(session?.channelId!)) return '本群组不允许使用此命令。';
+                    if (!await hasAdminPermission(ctx, session, config, 'sub')) return '权限不足。';
+                    try {
+                        const result = await ctx.database.remove('player_stats', { serverId: server.command });
+                        return `已成功清除 ${server.name} (${server.command}) 服务器 ${result.removed} 条战绩数据。`;
+                    } catch (error) {
+                        return `[HLL] 错误 (${server.name})：${error.message}`;
+                    }
+                }).usage('清除本服务器所有战绩 (需要下级或以上管理员权限)');
 
             ctx.setInterval(async () => {
                 if (!config.enableStats) return; // 检查全局开关
                 // ... 战绩统计 Interval 逻辑 ...
-                 let conn: HLLConnection | null = null;
+                let conn: HLLConnection | null = null;
                 try {
                     conn = new HLLConnection();
                     await conn.connect(server.host, server.port, server.password);
@@ -595,7 +620,7 @@ export function apply(ctx: Context, config: Config) {
                     await processKillLog(ctx, server.command, teamKillLog, true);
                     ctx.logger.info(`[${server.name}] 战绩统计已更新。`);
                 } catch (error) {
-                     ctx.logger.error(`[${server.name}] 战绩统计失败：${error.message}`);
+                    ctx.logger.error(`[${server.name}] 战绩统计失败：${error.message}`);
                 } finally {
                     if (conn) conn.close();
                 }
@@ -607,8 +632,8 @@ export function apply(ctx: Context, config: Config) {
             baseCommand.subcommand('.生成卡密 <type:string> <duration:string> <count:integer> [remark:string]')
                 .action(async ({ session }, type, durationStr, count, remark = 'VIP卡密') => {
                     // ... 生成卡密逻辑 (权限检查使用 hasAdminPermission 'super') ...
-                     if (server.allowedGroups?.length && !server.allowedGroups.includes(session?.channelId!)) return '本群组不允许使用此命令。';
-                     if (!await hasAdminPermission(ctx, session, config, 'super')) return '权限不足，只有超级管理员才能生成卡密。';
+                    if (server.allowedGroups?.length && !server.allowedGroups.includes(session?.channelId!)) return '本群组不允许使用此命令。';
+                    if (!await hasAdminPermission(ctx, session, config, 'super')) return '权限不足，只有超级管理员才能生成卡密。';
 
                     if (!['global', 'server'].includes(type)) return '无效的卡密类型，请指定 "global" 或 "server"。';
                     const durationCheck = parseTime(durationStr);
@@ -621,14 +646,14 @@ export function apply(ctx: Context, config: Config) {
                     const now = new Date();
 
                     for (let i = 0; i < count; i++) {
-                         const newKey = uuidv4();
-                         generatedKeys.push(newKey);
-                         const commonData = { key: newKey, duration: durationStr, remark, isUsed: false, createdAt: now };
-                         if (type === 'global') {
+                        const newKey = uuidv4();
+                        generatedKeys.push(newKey);
+                        const commonData = { key: newKey, duration: durationStr, remark, isUsed: false, createdAt: now };
+                        if (type === 'global') {
                             keysToCreate.push({ ...commonData });
                         } else {
                             keysToCreate.push({ ...commonData, serverId: server.command });
-                         }
+                        }
                     }
 
                     try {
@@ -641,7 +666,7 @@ export function apply(ctx: Context, config: Config) {
                         try {
                             // 尝试发送私聊消息给执行命令的管理员
                             await session.bot.sendPrivateMessage(session.userId!, privateMessageContent);
-                             // 如果私聊发送成功，在原频道回复简短确认信息
+                            // 如果私聊发送成功，在原频道回复简短确认信息
                             return `${successMessage} 卡密已私聊发送给您。`;
                         } catch (privateMessageError) {
                             // 如果私聊失败 (例如用户未启动私聊或机器人没有权限)
@@ -662,7 +687,7 @@ export function apply(ctx: Context, config: Config) {
                 .action(async ({ session }, uid, key) => {
                     // ... 卡密兑换逻辑 ...
                     if (server.allowedGroups?.length && !server.allowedGroups.includes(session?.channelId!)) return '本群组不允许使用此命令。';
-                     if (!config.enableVip) return 'VIP功能未启用，无法兑换卡密。';
+                    if (!config.enableVip) return 'VIP功能未启用，无法兑换卡密。';
 
                     let cdKeyRecord: GlobalCdKey | ServerCdKey | null = null;
                     let keyType: 'global' | 'server' = 'server';
@@ -679,11 +704,8 @@ export function apply(ctx: Context, config: Config) {
                             const [globalKey] = await ctx.database.get('global_cdkeys', { key });
                             if (globalKey) {
                                 if (globalKey.isUsed) {
-                                      return `您已使用此全局卡密 ${key} 兑换过 VIP。`;
-                                } else {/*
-                                    // 全局标记未用，检查是否之前用过但没标记成功（冗余检查）
-                                     const existingVip = await ctx.database.get('vip_data', {uid: uid, serverId: server.command, remark: {$like: `%卡密: ${key}%` }});
-                                     if(existingVip.length > 0) isGlobalKeyUsedOnThisServer = true;*/
+                                    return `您已使用此全局卡密 ${key} 兑换过 VIP。`;
+                                } else {
                                 }
 
                                 cdKeyRecord = globalKey; keyType = 'global'; durationStr = globalKey.duration; remark = globalKey.remark;
@@ -693,7 +715,7 @@ export function apply(ctx: Context, config: Config) {
                         if (!cdKeyRecord) return '无效的卡密。';
                         const expireAt = parseTime(durationStr);
                         if (!expireAt) return '卡密关联的时间格式无效。';
-                         // 再次检查全局卡密是否已在此服务器为该用户添加过 VIP
+                        // 再次检查全局卡密是否已在此服务器为该用户添加过 VIP
                         if (keyType === 'global' && isGlobalKeyUsedOnThisServer) return `您已使用此全局卡密 ${key} 在服务器 ${server.name} 兑换过 VIP。`;
 
                         let conn: HLLConnection | null = null;
@@ -703,7 +725,7 @@ export function apply(ctx: Context, config: Config) {
                             const finalRemark = `${remark} (卡密: ${key})`;
                             conn.send(`VipAdd ${uid} "${finalRemark}"`);
                             await conn.receive();
-                           await ctx.database.create('vip_data', { uid, serverId: server.command, expireAt, remark: finalRemark });
+                            await ctx.database.create('vip_data', { uid, serverId: server.command, expireAt, remark: finalRemark });
 
                             const now = new Date();
                             const updateData = { isUsed: true, usedByUid: uid, usedAt: now };
@@ -715,10 +737,10 @@ export function apply(ctx: Context, config: Config) {
                             }
                             return `卡密 ${key} 兑换成功！已为 UID ${uid} 添加 ${durationStr} VIP (${server.name})，备注：${remark}。`;
                         } catch (rconError) {
-                             ctx.logger.error(`[HLL] RCON 操作失败 (${server.name}) 卡密 ${key} for ${uid}: ${rconError.message}`);
-                             return `[HLL] 错误 (${server.name})：VIP 添加失败，请联系管理员。错误: ${rconError.message}`;
+                            ctx.logger.error(`[HLL] RCON 操作失败 (${server.name}) 卡密 ${key} for ${uid}: ${rconError.message}`);
+                            return `[HLL] 错误 (${server.name})：VIP 添加失败，请联系管理员。错误: ${rconError.message}`;
                         } finally {
-                            if(conn) conn.close();
+                            if (conn) conn.close();
                         }
                     } catch (dbError) {
                         ctx.logger.error(`[HLL] 卡密兑换数据库操作失败 (${server.name}) Key ${key}: ${dbError.message}`);
@@ -730,7 +752,7 @@ export function apply(ctx: Context, config: Config) {
 
     // --- Interval Timers (VIP Expiry Check - 保持不变) ---
     ctx.setInterval(async () => {
-       // ... VIP 过期检查逻辑 ...
+        // ... VIP 过期检查逻辑 ...
         const now = new Date()
         const expiredVips = await ctx.database.get('vip_data', { expireAt: { $lte: now } })
         if (!expiredVips.length) return;
@@ -739,14 +761,14 @@ export function apply(ctx: Context, config: Config) {
             const server = config.servers.find(s => s.command === vip.serverId)
             if (!server) {
                 ctx.logger.warn(`处理过期VIP时找不到服务器配置：${vip.serverId}, UID: ${vip.uid}`)
-                 await ctx.database.remove('vip_data', { id: vip.id });
+                await ctx.database.remove('vip_data', { id: vip.id });
                 continue
             }
             // Check global VIP switch
             if (!config.enableVip) {
-                 await ctx.database.remove('vip_data', { id: vip.id });
-                 ctx.logger.info(`全局VIP功能已禁用，仅从数据库移除过期记录 UID: ${vip.uid} (${server.name})`);
-                 continue;
+                await ctx.database.remove('vip_data', { id: vip.id });
+                ctx.logger.info(`全局VIP功能已禁用，仅从数据库移除过期记录 UID: ${vip.uid} (${server.name})`);
+                continue;
             }
 
             let conn: HLLConnection | null = null;
@@ -760,7 +782,7 @@ export function apply(ctx: Context, config: Config) {
             } catch (error) {
                 ctx.logger.error(`移除 UID ${vip.uid} (${server.name}) 的过期 VIP 失败：${error.message}`)
             } finally {
-                if(conn) conn.close()
+                if (conn) conn.close()
             }
         }
     }, 3600_000)
@@ -776,25 +798,25 @@ async function getLog(conn: HLLConnection, command: string): Promise<string> {
 // --- processKillLog function (保持不变) ---
 async function processKillLog(ctx: Context, serverId: string, log: string, isTeamKill: boolean): Promise<void> {
     // ... processKillLog 逻辑 ...
-     const lines = log.split('\n');
+    const lines = log.split('\n');
     const uidsInLog = new Set<string>();
     const parsedEvents: { killerUid: string, killerName: string, victimUid: string, victimName: string, isTk: boolean }[] = [];
 
     // 1. Parse log, collect UIDs and events
     for (const line of lines) {
         const match = isTeamKill ? teamKillRegex.exec(line) : killRegex.exec(line);
-        if(match){
-             const killerUid = match[3];
-             const victimUid = match[6];
-             if(killerUid) uidsInLog.add(killerUid);
-             if(victimUid) uidsInLog.add(victimUid);
-             if(killerUid && victimUid){
-                 parsedEvents.push({
-                     killerUid, killerName: match[1].trim(),
-                     victimUid, victimName: match[4].trim(),
-                     isTk: isTeamKill
-                 });
-             }
+        if (match) {
+            const killerUid = match[3];
+            const victimUid = match[6];
+            if (killerUid) uidsInLog.add(killerUid);
+            if (victimUid) uidsInLog.add(victimUid);
+            if (killerUid && victimUid) {
+                parsedEvents.push({
+                    killerUid, killerName: match[1].trim(),
+                    victimUid, victimName: match[4].trim(),
+                    isTk: isTeamKill
+                });
+            }
         }
     }
 
@@ -820,7 +842,7 @@ async function processKillLog(ctx: Context, serverId: string, log: string, isTea
                 uid: event.killerUid, serverId, playerName: event.killerName,
                 kills: 0, deaths: 0, teamKills: 0, lastUpdate: now
             };
-             if (!existing) playerCache.set(event.killerUid, killerStats);
+            if (!existing) playerCache.set(event.killerUid, killerStats);
         }
         killerStats.playerName = event.killerName;
         killerStats.kills += 1;
@@ -832,10 +854,10 @@ async function processKillLog(ctx: Context, serverId: string, log: string, isTea
         let victimStats = statsToUpdate.get(event.victimUid);
         if (!victimStats) {
             const existing = playerCache.get(event.victimUid);
-             victimStats = existing ? { ...existing } : {
+            victimStats = existing ? { ...existing } : {
                 uid: event.victimUid, serverId, playerName: event.victimName,
                 kills: 0, deaths: 0, teamKills: 0, lastUpdate: now
-             };
+            };
             if (!existing) playerCache.set(event.victimUid, victimStats);
         }
         victimStats.playerName = event.victimName;
