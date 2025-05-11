@@ -1,13 +1,18 @@
-import { Context, Schema, Session } from 'koishi'
+import { Context, Logger, Schema, Session } from 'koishi'
 import { Socket } from 'net'
 import dayjs from 'dayjs';
 import { v4 as uuidv4 } from 'uuid';
+import * as Utils from './utils'
 
 export const name = 'multi-rcon-hll'
 export const reusable = true
 export const inject = ['database']
+const logger = new Logger(name)
+let onlinesuspicious: Array<string> = []
 
 export interface Config {
+    botid: string
+    sendto: string
     servers: ServerConfig[]
     customCommands: CustomCommand[]
     enableGamestateCommand?: boolean;
@@ -34,6 +39,8 @@ export interface CustomCommand {
 
 export const Config: Schema<Config> = Schema.intersect([
     Schema.object({
+        botid: Schema.string().required().description('机器人QQ号'),
+        sendto: Schema.string().required().description('发送消息的目标群组ID'),
         superAdminIds: Schema.array(Schema.string()).description('超级管理员 ID 列表 (拥有所有权限，包括管理下级管理员)'),
         enableGamestateCommand: Schema.boolean().default(true).description('启用所有服务器的 .查服 指令'),
         enableMassMessage: Schema.boolean().default(false).description('启用所有服务器的 .群发 指令 (需要管理员权限)'),
@@ -73,6 +80,8 @@ export interface PlayerStats {
     deaths: number;
     teamKills: number;
     lastUpdate: Date;
+    isadmin: boolean;
+    issuspicious: boolean;
 }
 
 export interface GlobalCdKey {
@@ -114,7 +123,7 @@ declare module 'koishi' {
     }
 }
 
-class HLLConnection {
+export class HLLConnection {
     private socket: Socket
     private xorKey: Buffer | null = null
     private isConnected = false
@@ -201,83 +210,6 @@ class HLLConnection {
     }
 }
 
-function parseTime(timeStr: string): Date | null {
-    let totalSeconds = 0;
-    let matched = false;
-    const regex = /(\d+)([dmyhs])/g;
-    let match;
-    while ((match = regex.exec(timeStr)) !== null) {
-        matched = true;
-        const value = parseInt(match[1]);
-        if (isNaN(value) || value <= 0) return null;
-        const unit = match[2];
-        switch (unit) {
-            case 's': totalSeconds += value; break;
-            case 'h': totalSeconds += value * 3600; break;
-            case 'd': totalSeconds += value * 86400; break;
-            case 'm': totalSeconds += value * 2592000; break; // 30 days
-            case 'y': totalSeconds += value * 31536000; break; // 365 days
-            default: return null;
-        }
-    }
-    if (!matched) return null;
-    const futureDate = dayjs().add(totalSeconds, 'seconds');
-    if (futureDate.isBefore(dayjs())) return null;
-    return futureDate.toDate();
-}
-
-function parseMs(timeStr: string): number | null {
-    let totalSeconds = 0;
-    let matched = false;
-    const regex = /(\d+)([dmyhs])/g;
-    let match;
-    while ((match = regex.exec(timeStr)) !== null) {
-        matched = true;
-        const value = parseInt(match[1]);
-        if (isNaN(value) || value <= 0) return null;
-        const unit = match[2];
-        switch (unit) {
-            case 's': totalSeconds += value; break;
-            case 'h': totalSeconds += value * 3600; break;
-            case 'd': totalSeconds += value * 86400; break;
-            case 'm': totalSeconds += value * 2592000; break; // 30 days
-            case 'y': totalSeconds += value * 31536000; break; // 365 days
-            default: return null;
-        }
-    }
-    if (!matched) return null;
-    return totalSeconds * 1000;
-}
-
-const killRegex = /KILL: (.*)\((Allies|Axis)\/(.*?)\)\s*->\s*(.*)\((Allies|Axis)\/(.*?)\)\s*with\s*(.*)/;
-const teamKillRegex = /TEAM KILL: (.*)\((Allies|Axis)\/(.*?)\)\s*->\s*(.*)\((Allies|Axis)\/(.*?)\)\s*with\s*(.*)/;
-
-
-async function hasAdminPermission(
-    ctx: Context,
-    session: Session,
-    config: Config,
-    requiredLevel: 'super' | 'sub'
-): Promise<boolean> {
-    const userId = session?.userId;
-    if (!userId) return false; // No user ID, no permission
-
-    if (config.superAdminIds?.includes(userId)) {
-        return true;
-    }
-
-    if (requiredLevel === 'super') {
-        return false;
-    }
-
-    if (requiredLevel === 'sub') {
-        const [subAdmin] = await ctx.database.get('hll_sub_admins', { userId: userId });
-        return !!subAdmin; // Return true if subAdmin record exists
-    }
-
-    return false; // Should not reach here, but default to false
-}
-
 export function apply(ctx: Context, config: Config) {
 
     ctx.model.extend('vip_data', {
@@ -288,7 +220,7 @@ export function apply(ctx: Context, config: Config) {
     ctx.model.extend('player_stats', {
         uid: 'string', serverId: 'string', playerName: 'string',
         kills: 'integer', deaths: 'integer', teamKills: 'integer',
-        lastUpdate: 'timestamp',
+        lastUpdate: 'timestamp', isadmin: 'boolean', issuspicious: 'boolean',
     }, { primary: ['uid', 'serverId'] });
 
     ctx.model.extend('global_cdkeys', {
@@ -323,7 +255,7 @@ export function apply(ctx: Context, config: Config) {
         baseCommand.action(async ({ session, options }, inputCommand) => {
             if (!inputCommand) return '请输入RCON指令。';
             if (server.allowedGroups?.length && !server.allowedGroups.includes(session?.channelId!)) return '本群组不允许使用此服务器的命令。';
-            if (!await hasAdminPermission(ctx, session, config, 'sub')) return '权限不足。';
+            if (!await Utils.hasAdminPermission(ctx, session, config, 'sub')) return '权限不足。';
             if (options.time && options.time !== '0') {
                 ctx.setTimeout(async () => {
                     const conn = new HLLConnection()
@@ -342,7 +274,7 @@ export function apply(ctx: Context, config: Config) {
                     } finally {
                         conn.close()
                     }
-                }, parseMs(options.time))
+                }, Utils.parseMs(options.time))
                 return `已设置定时 ${options.time} 后执行 ${inputCommand} 。`;
             }
             const conn = new HLLConnection()
@@ -408,7 +340,7 @@ export function apply(ctx: Context, config: Config) {
         baseCommand.subcommand('.添加管理员 <targetUserId:string>', '添加下级管理员 (仅超管可用)')
             .action(async ({ session }, targetUserId) => {
                 if (server.allowedGroups?.length && !server.allowedGroups.includes(session?.channelId!)) return '本群组不允许使用此服务器的命令。';
-                if (!await hasAdminPermission(ctx, session, config, 'super')) {
+                if (!await Utils.hasAdminPermission(ctx, session, config, 'super')) {
                     return '权限不足，只有超级管理员才能添加下级管理员。';
                 }
                 if (!targetUserId) return '请输入要添加的用户ID。';
@@ -444,7 +376,7 @@ export function apply(ctx: Context, config: Config) {
         baseCommand.subcommand('.删除管理员 <targetUserId:string>', '移除下级管理员 (仅超管可用)')
             .action(async ({ session }, targetUserId) => {
                 if (server.allowedGroups?.length && !server.allowedGroups.includes(session?.channelId!)) return '本群组不允许使用此服务器的命令。';
-                if (!await hasAdminPermission(ctx, session, config, 'super')) {
+                if (!await Utils.hasAdminPermission(ctx, session, config, 'super')) {
                     return '权限不足，只有超级管理员才能移除下级管理员。';
                 }
                 if (!targetUserId) return '请输入要移除的用户ID。';
@@ -472,7 +404,7 @@ export function apply(ctx: Context, config: Config) {
         baseCommand.subcommand('.列出管理员', '列出所有管理员 (超管及下级管理员可用)')
             .action(async ({ session }) => {
                 if (server.allowedGroups?.length && !server.allowedGroups.includes(session?.channelId!)) return '本群组不允许使用此服务器的命令。';
-                if (!await hasAdminPermission(ctx, session, config, 'sub')) {
+                if (!await Utils.hasAdminPermission(ctx, session, config, 'sub')) {
                     return '权限不足。';
                 }
 
@@ -510,9 +442,9 @@ export function apply(ctx: Context, config: Config) {
         if (config.enableMassMessage) {
             baseCommand.subcommand('.群发 <message:text>')
                 .action(async ({ session }, message) => {
-                    // ... 群发逻辑 (权限检查使用 hasAdminPermission) ...
+                    // ... 群发逻辑 (权限检查使用 Utils.hasAdminPermission) ...
                     if (server.allowedGroups?.length && !server.allowedGroups.includes(session?.channelId!)) return '本群组不允许使用此命令。';
-                    if (!await hasAdminPermission(ctx, session, config, 'sub')) return '权限不足。';
+                    if (!await Utils.hasAdminPermission(ctx, session, config, 'sub')) return '权限不足。';
                     let conn: HLLConnection | null = null;
                     try {
                         conn = new HLLConnection();
@@ -551,13 +483,13 @@ export function apply(ctx: Context, config: Config) {
         if (config.enableVip) {
             baseCommand.subcommand('.VIP <uid:string> <duration:string> [remark:string]')
                 .action(async ({ session }, uid, durationStr, remark = '添加VIP') => {
-                    // ... VIP 逻辑 (权限检查使用 hasAdminPermission) ...
+                    // ... VIP 逻辑 (权限检查使用 Utils.hasAdminPermission) ...
                     if (server.allowedGroups?.length && !server.allowedGroups.includes(session?.channelId!)) return '本群组不允许使用此命令。';
-                    if (!await hasAdminPermission(ctx, session, config, 'sub')) return '权限不足。';
+                    if (!await Utils.hasAdminPermission(ctx, session, config, 'sub')) return '权限不足。';
                     let conn: HLLConnection | null = null;
                     try {
                         conn = new HLLConnection();
-                        const expireAt = parseTime(durationStr);
+                        const expireAt = Utils.parseTime(durationStr);
                         if (!expireAt) return '无效的时间格式或时间已过期。请使用例如 1d, 30m, 1y, 5h30m 等格式。';
 
                         await conn.connect(server.host, server.port, server.password);
@@ -572,22 +504,22 @@ export function apply(ctx: Context, config: Config) {
                     }
                 }).usage('添加VIP (格式: .VIP <UID> <时间> [备注]) (需要下级或以上管理员权限)');
             baseCommand.subcommand('.恢复VIP')
-            .action(async ({ session }) => {
-                // 恢复数据库里面未到期的VIP
-                const conn = new HLLConnection();
-                const vipData = await ctx.database.get('vip_data', { expireAt: { $gt: new Date() } });
-                for (const data of vipData) {
-                    if (data.expireAt.getTime() < Date.now()) continue;
-                    try {
-                        await conn.connect(server.host, server.port, server.password);
-                        conn.send(`VipAdd ${data.uid} "${data.remark}"`);
-                        await conn.receive();
-                    } catch (error) {
-                        console.error(`[HLL] 错误 (${server.name})：${error.message}`);
+                .action(async ({ session }) => {
+                    // 恢复数据库里面未到期的VIP
+                    const conn = new HLLConnection();
+                    const vipData = await ctx.database.get('vip_data', { expireAt: { $gt: new Date() } });
+                    for (const data of vipData) {
+                        if (data.expireAt.getTime() < Date.now()) continue;
+                        try {
+                            await conn.connect(server.host, server.port, server.password);
+                            conn.send(`VipAdd ${data.uid} "${data.remark}"`);
+                            await conn.receive();
+                        } catch (error) {
+                            console.error(`[HLL] 错误 (${server.name})：${error.message}`);
+                        }
                     }
-                }
-                if (conn) conn.close();
-            })
+                    if (conn) conn.close();
+                })
         }
 
         // Stats commands (Uses global config.enableStats)
@@ -614,9 +546,9 @@ export function apply(ctx: Context, config: Config) {
 
             baseCommand.subcommand('.清除战绩')
                 .action(async ({ session }) => {
-                    // ... 清除战绩逻辑 (权限检查使用 hasAdminPermission) ...
+                    // ... 清除战绩逻辑 (权限检查使用 Utils.hasAdminPermission) ...
                     if (server.allowedGroups?.length && !server.allowedGroups.includes(session?.channelId!)) return '本群组不允许使用此命令。';
-                    if (!await hasAdminPermission(ctx, session, config, 'sub')) return '权限不足。';
+                    if (!await Utils.hasAdminPermission(ctx, session, config, 'sub')) return '权限不足。';
                     try {
                         const result = await ctx.database.remove('player_stats', { serverId: server.command });
                         return `已成功清除 ${server.name} (${server.command}) 服务器 ${result.removed} 条战绩数据。`;
@@ -632,10 +564,10 @@ export function apply(ctx: Context, config: Config) {
                 try {
                     conn = new HLLConnection();
                     await conn.connect(server.host, server.port, server.password);
-                    const killLog = await getLog(conn, 'showlog 5 kill');
-                    const teamKillLog = await getLog(conn, 'showlog 5 team kill');
-                    await processKillLog(ctx, server.command, killLog, false);
-                    await processKillLog(ctx, server.command, teamKillLog, true);
+                    const killLog = await Utils.getLog(conn, 'showlog 5 kill');
+                    const teamKillLog = await Utils.getLog(conn, 'showlog 5 team kill');
+                    await Utils.processKillLog(ctx, server.command, killLog, false);
+                    await Utils.processKillLog(ctx, server.command, teamKillLog, true);
                     ctx.logger.info(`[${server.name}] 战绩统计已更新。`);
                 } catch (error) {
                     ctx.logger.error(`[${server.name}] 战绩统计失败：${error.message}`);
@@ -649,12 +581,12 @@ export function apply(ctx: Context, config: Config) {
         if (config.enableCdKeyRedemption) {
             baseCommand.subcommand('.生成卡密 <type:string> <duration:string> <count:integer> [remark:string]')
                 .action(async ({ session }, type, durationStr, count, remark = 'VIP卡密') => {
-                    // ... 生成卡密逻辑 (权限检查使用 hasAdminPermission 'super') ...
+                    // ... 生成卡密逻辑 (权限检查使用 Utils.hasAdminPermission 'super') ...
                     if (server.allowedGroups?.length && !server.allowedGroups.includes(session?.channelId!)) return '本群组不允许使用此命令。';
-                    if (!await hasAdminPermission(ctx, session, config, 'super')) return '权限不足，只有超级管理员才能生成卡密。';
+                    if (!await Utils.hasAdminPermission(ctx, session, config, 'super')) return '权限不足，只有超级管理员才能生成卡密。';
 
                     if (!['global', 'server'].includes(type)) return '无效的卡密类型，请指定 "global" 或 "server"。';
-                    const durationCheck = parseTime(durationStr);
+                    const durationCheck = Utils.parseTime(durationStr);
                     if (!durationCheck) return '无效的时间格式或时间已过期。请使用例如 1d, 30m, 1y, 5h30m 等格式。';
                     if (!Number.isInteger(count) || count <= 0) return '生成的数量必须是一个正整数。';
                     if (count > 100) return '出于性能考虑，单次最多生成 100 个卡密。';
@@ -731,7 +663,7 @@ export function apply(ctx: Context, config: Config) {
                         }
 
                         if (!cdKeyRecord) return '无效的卡密。';
-                        const expireAt = parseTime(durationStr);
+                        const expireAt = Utils.parseTime(durationStr);
                         if (!expireAt) return '卡密关联的时间格式无效。';
                         // 再次检查全局卡密是否已在此服务器为该用户添加过 VIP
                         if (keyType === 'global' && isGlobalKeyUsedOnThisServer) return `您已使用此全局卡密 ${key} 在服务器 ${server.name} 兑换过 VIP。`;
@@ -766,6 +698,134 @@ export function apply(ctx: Context, config: Config) {
                     }
                 }).usage('使用卡密兑换VIP (格式: .卡密兑换 <游戏内UID> <卡密>) (所有用户)');
         }
+        //通过uuid添加可疑 指令
+        baseCommand.subcommand('.添加可疑玩家 <uuid:string>')
+            .action(async ({ session }, uuid) => {
+                if (!session?.channelId) return '此命令只能在群组中使用。';
+                // 检查是否为设置的管理员或分管
+                if (!Utils.hasAdminPermission(ctx, session, config, 'sub')) return '您没有权限使用此命令。';
+                //在玩家信息数据库里面设置isadmin
+                await ctx.database.set('player_stats', { uid: uuid }, { issuspicious: true });
+                return '设置成功';
+            })
+        baseCommand.subcommand('.删除可疑玩家 <uuid:string>')
+            .action(async ({ session }, uuid) => {
+                if (!session?.channelId) return '此命令只能在群组中使用。';
+                // 检查是否为设置的管理员或分管
+                if (!Utils.hasAdminPermission(ctx, session, config, 'sub')) return '您没有权限使用此命令。';
+                //在玩家信息数据库里面设置isadmin
+                await ctx.database.set('player_stats', { uid: uuid }, { issuspicious: false });
+                return '设置成功';
+            })
+
+        baseCommand.subcommand('.在线管理员')
+            .action(async ({ session }) => {
+                // 判断当前会话是否在群组中
+                if (!session?.channelId) return '此命令只能在群组中使用。';
+                // 查询所有在线玩家
+                const conn = new HLLConnection();
+                // 连接服务器
+                await conn.connect(server.host, server.port, server.password);
+                // 发送查询玩家ID的命令
+                await conn.send('Get PlayerIds');
+                const playerIdsResponse = (await conn.receive()).toString();
+                const playerLines = playerIdsResponse.split('\n');
+                // const playerUids: string[] = []; // 不再直接用于迭代，但可以通过 Map 获取键集合
+                // 使用 Map 存储 UID 到名称的映射，方便按 UID 查找名称
+                const playerNamesMap: Map<string, string> = new Map();
+
+                // 遍历 playerLines 数组，查找包含玩家数据的行（跳过头部等）
+                playerLines.forEach(line => {
+                    line = line.trim();
+                    // 跳过空行、头部或其他非玩家数据行
+                    if (line === '' || line.startsWith('[HLL]')) {
+                         return;
+                    }
+
+                    // 假设包含玩家数据的行通过制表符 '\t' 分隔多个玩家条目
+                    const playerEntries = line.split('\t');
+
+                    playerEntries.forEach(entry => {
+                         entry = entry.trim(); // 清理每个玩家条目字符串
+                         if (entry === '') return; // 跳过空的玩家条目
+
+                         // 新的正则表达式：
+                         // \d*\s* - 匹配可选的数字和后面的空白字符（处理每个条目开头的序号）
+                         // (.*) - 捕获玩家名称（匹配冒号前任意字符）
+                         // :\s* - 匹配冒号和后面的空白
+                         // ([a-f0-9]{32}|765611\d{10,}) - 捕获玩家ID (32位HEX 或 SteamID64)
+                         const regex = /\d*\s*(.*):\s*([a-f0-9]{32}|765611\d{10,})/;
+
+                         const match = entry.match(regex); // 使用 match() 查找一次匹配
+
+                         if (match && match[1] && match[2]) {
+                             const playerName = match[1].trim(); // 提取并清理玩家名称 (第1个捕获组)
+                             const playerUid = match[2];       // 提取玩家UID (第2个捕获组)
+
+                             // 将 UID 作为键，玩家名称作为值存入 Map
+                             playerNamesMap.set(playerUid, playerName);
+                         }
+                    });
+                });
+
+                // *** 以下获取 AdminIds 的代码保持不变，因为它处理的是 Get AdminIds 命令的响应格式 ***
+                await conn.send('Get AdminIds');
+                const AdminIdsResponse = await (conn.receive()).toString();
+                const lines = AdminIdsResponse.split('\n').filter(line => line.trim() !== '');
+                // 使用 flatMap 处理每一行，提取 ID
+                const adminIds = lines.flatMap(line => {
+                    // 使用一个或多个空白字符分割行
+                    const parts = line.split(/\s+/).filter(part => part !== '');
+                    if (parts.length < 2) {
+                        // 如果分割后元素少于2个，说明格式有问题，跳过此行
+                        return [];
+                    }
+                    const idsInLine = [];
+                    // 从第二个元素（索引1）开始，每隔3个元素就是ID
+                    // 数据格式是: 计数 ID 角色 名称 ID 角色 名称 ...
+                    for (let i = 1; i < parts.length; i += 3) {
+                        idsInLine.push(parts[i]);
+                    }
+                    return idsInLine;
+                });
+                // *** 获取 AdminIds 代码结束 ***
+
+                // 从 Map 中获取所有在线玩家的 UID 列表
+                const allOnlinePlayerUids = Array.from(playerNamesMap.keys());
+
+                // 取在线玩家 UID 和 Admin UID 的交集，得到在线管理员的 UIDs
+                const onlineAdminsUids = allOnlinePlayerUids.filter(uid => adminIds.includes(uid));
+
+                // 构建要发送的在线管理员名称列表
+                const onlineAdminNamesList: string[] = [];
+                if (onlineAdminsUids.length > 0) {
+                     onlineAdminsUids.forEach((adminUid, index) => {
+                         // 从 playerNamesMap 中查找对应的玩家名称
+                         const playerName = playerNamesMap.get(adminUid);
+                         if (playerName) {
+                              // 格式化为 "序号. 玩家名称"
+                             onlineAdminNamesList.push(`${index + 1}. ${playerName}`);
+                         } else {
+                             // 如果因为某种原因这个管理员的名称没在玩家列表里找到（理论上不可能，保险起见）
+                             onlineAdminNamesList.push(`${index + 1}. Unknown Player (ID: ${adminUid})`);
+                         }
+                     });
+
+                     const outputString = onlineAdminNamesList.join('\n');
+
+                     // 打印日志，包含在线管理员名称列表
+                     // 注意：这里日志和发送的内容都是格式化好的 "序号. 玩家名称" 列表
+                     logger.info(`在线管理员：\n${outputString}`);
+
+                     // 向 session 返回在线管理员的名称列表
+                     session.send(outputString);
+                } else {
+                    // 如果 onlineAdminsUids 数组为空，说明没有找到在线的管理员
+                    const noAdminsMessage = "没有在线的管理员。";
+                    //logger.info(noAdminsMessage); // 记录日志
+                    session.send(noAdminsMessage); // 发送没有找到的提示信息
+                }
+            })
     })
 
     // --- Interval Timers (VIP Expiry Check - 保持不变) ---
@@ -804,92 +864,41 @@ export function apply(ctx: Context, config: Config) {
             }
         }
     }, 3600_000)
-}
-
-// --- getLog function (保持不变) ---
-async function getLog(conn: HLLConnection, command: string): Promise<string> {
-    conn.send(command);
-    const response = await conn.receive();
-    return response.toString();
-}
-
-// --- processKillLog function (保持不变) ---
-async function processKillLog(ctx: Context, serverId: string, log: string, isTeamKill: boolean): Promise<void> {
-    // ... processKillLog 逻辑 ...
-    const lines = log.split('\n');
-    const uidsInLog = new Set<string>();
-    const parsedEvents: { killerUid: string, killerName: string, victimUid: string, victimName: string, isTk: boolean }[] = [];
-
-    // 1. Parse log, collect UIDs and events
-    for (const line of lines) {
-        const match = isTeamKill ? teamKillRegex.exec(line) : killRegex.exec(line);
-        if (match) {
-            const killerUid = match[3];
-            const victimUid = match[6];
-            if (killerUid) uidsInLog.add(killerUid);
-            if (victimUid) uidsInLog.add(victimUid);
-            if (killerUid && victimUid) {
-                parsedEvents.push({
-                    killerUid, killerName: match[1].trim(),
-                    victimUid, victimName: match[4].trim(),
-                    isTk: isTeamKill
-                });
+    //每一分钟查询可疑玩家是否在线
+    ctx.setInterval(async () => {
+        config.servers.forEach(async server => {
+            const conn = new HLLConnection();
+            await conn.connect(server.host, server.port, server.password);
+            conn.send('Get PlayerIds')
+            const playerIdsResponse = (await conn.receive()).toString();
+            const playerLines = playerIdsResponse.split('\n');
+            const playerUids: string[] = [];
+            playerLines.forEach(line => {
+                line = line.trim();
+                if (line === '') return;
+                const lineWithoutNumber = line.replace(/^\d+\s*/, '');
+                const regex = /(?:.*?):\s*([a-f0-9]{32}|765611\d{10,})/g;
+                let match: string[];
+                while ((match = regex.exec(lineWithoutNumber)) !== null) { if (match[1]) playerUids.push(match[1]); }
+            });
+            for (const uid of playerUids) {
+                //检查是否为可疑玩家
+                const player = await ctx.database.get('player_stats', { uid: uid });
+                if (player[0]?.issuspicious && !onlinesuspicious.includes(uid)) {
+                    //logger.info(`可疑玩家 ${uid} 在 ${server.name} 上线`)
+                    const d = new Date()
+                    ctx.bots.find(bot => bot.selfId === config.botid)?.sendMessage(config.sendto, `可疑玩家 ${uid} 在${d.toDateString()} ${d.toLocaleTimeString()} 上线`)
+                    onlinesuspicious.push(uid)
+                }
             }
-        }
-    }
-
-    if (!parsedEvents.length) return;
-
-    // 2. Preload existing data for involved players
-    const playerCache = new Map<string, PlayerStats>();
-    if (uidsInLog.size > 0) {
-        const existingPlayers = await ctx.database.get('player_stats', { uid: { $in: Array.from(uidsInLog) }, serverId });
-        existingPlayers.forEach(p => playerCache.set(p.uid, p));
-    }
-
-    // 3. Aggregate updates
-    const statsToUpdate = new Map<string, PlayerStats>();
-    const now = new Date();
-
-    for (const event of parsedEvents) {
-        // Killer
-        let killerStats = statsToUpdate.get(event.killerUid);
-        if (!killerStats) {
-            const existing = playerCache.get(event.killerUid);
-            killerStats = existing ? { ...existing } : {
-                uid: event.killerUid, serverId, playerName: event.killerName,
-                kills: 0, deaths: 0, teamKills: 0, lastUpdate: now
-            };
-            if (!existing) playerCache.set(event.killerUid, killerStats);
-        }
-        killerStats.playerName = event.killerName;
-        killerStats.kills += 1;
-        if (event.isTk) killerStats.teamKills += 1;
-        killerStats.lastUpdate = now;
-        statsToUpdate.set(event.killerUid, killerStats);
-
-        // Victim
-        let victimStats = statsToUpdate.get(event.victimUid);
-        if (!victimStats) {
-            const existing = playerCache.get(event.victimUid);
-            victimStats = existing ? { ...existing } : {
-                uid: event.victimUid, serverId, playerName: event.victimName,
-                kills: 0, deaths: 0, teamKills: 0, lastUpdate: now
-            };
-            if (!existing) playerCache.set(event.victimUid, victimStats);
-        }
-        victimStats.playerName = event.victimName;
-        victimStats.deaths += 1;
-        victimStats.lastUpdate = now;
-        statsToUpdate.set(event.victimUid, victimStats);
-    }
-
-    // 4. Batch Upsert
-    if (statsToUpdate.size > 0) {
-        try {
-            await ctx.database.upsert('player_stats', Array.from(statsToUpdate.values()));
-        } catch (dbError) {
-            ctx.logger.error(`[HLL] 批量更新战绩数据库失败 (${serverId}): ${dbError.message}`);
-        }
-    }
+            onlinesuspicious.forEach(online => {
+                if (!playerUids.includes(online)) {
+                    //logger.info(`可疑玩家 ${online} 下线`)
+                    const d = new Date()
+                    ctx.bots.find(bot => bot.selfId === config.botid)?.sendMessage(config.sendto, `可疑玩家 ${online} 在${d.toDateString()} ${d.toLocaleTimeString()} 下线`)
+                    onlinesuspicious.splice(onlinesuspicious.indexOf(online), 1)
+                }
+            })
+        })
+    }, 60_000)
 }
