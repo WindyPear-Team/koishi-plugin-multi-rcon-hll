@@ -727,7 +727,7 @@ export function apply(ctx: Context, config: Config) {
                 // 连接服务器
                 await conn.connect(server.host, server.port, server.password);
                 // 发送查询玩家ID的命令
-                await conn.send('Get PlayerIds');
+                conn.send('Get PlayerIds');
                 const playerIdsResponse = (await conn.receive()).toString();
                 const playerLines = playerIdsResponse.split('\n');
                 // const playerUids: string[] = []; // 不再直接用于迭代，但可以通过 Map 获取键集合
@@ -768,9 +768,8 @@ export function apply(ctx: Context, config: Config) {
                     });
                 });
 
-                // *** 以下获取 AdminIds 的代码保持不变，因为它处理的是 Get AdminIds 命令的响应格式 ***
-                await conn.send('Get AdminIds');
-                const AdminIdsResponse = await (conn.receive()).toString();
+                conn.send('Get AdminIds');
+                const AdminIdsResponse = (await conn.receive()).toString();
                 const lines = AdminIdsResponse.split('\n').filter(line => line.trim() !== '');
                 // 使用 flatMap 处理每一行，提取 ID
                 const adminIds = lines.flatMap(line => {
@@ -790,8 +789,11 @@ export function apply(ctx: Context, config: Config) {
                 });
                 // *** 获取 AdminIds 代码结束 ***
 
+                //logger.info(`管理员ID：\n${adminIds.join('\n')}`);
+
                 // 从 Map 中获取所有在线玩家的 UID 列表
                 const allOnlinePlayerUids = Array.from(playerNamesMap.keys());
+                //logger.info(`在线玩家ID：\n${allOnlinePlayerUids.join('\n')}`);
 
                 // 取在线玩家 UID 和 Admin UID 的交集，得到在线管理员的 UIDs
                 const onlineAdminsUids = allOnlinePlayerUids.filter(uid => adminIds.includes(uid));
