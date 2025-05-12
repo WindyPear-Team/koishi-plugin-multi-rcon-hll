@@ -739,32 +739,32 @@ export function apply(ctx: Context, config: Config) {
                     line = line.trim();
                     // 跳过空行、头部或其他非玩家数据行
                     if (line === '' || line.startsWith('[HLL]')) {
-                         return;
+                        return;
                     }
 
                     // 假设包含玩家数据的行通过制表符 '\t' 分隔多个玩家条目
                     const playerEntries = line.split('\t');
 
                     playerEntries.forEach(entry => {
-                         entry = entry.trim(); // 清理每个玩家条目字符串
-                         if (entry === '') return; // 跳过空的玩家条目
+                        entry = entry.trim(); // 清理每个玩家条目字符串
+                        if (entry === '') return; // 跳过空的玩家条目
 
-                         // 新的正则表达式：
-                         // \d*\s* - 匹配可选的数字和后面的空白字符（处理每个条目开头的序号）
-                         // (.*) - 捕获玩家名称（匹配冒号前任意字符）
-                         // :\s* - 匹配冒号和后面的空白
-                         // ([a-f0-9]{32}|765611\d{10,}) - 捕获玩家ID (32位HEX 或 SteamID64)
-                         const regex = /\d*\s*(.*):\s*([a-f0-9]{32}|765611\d{10,})/;
+                        // 新的正则表达式：
+                        // \d*\s* - 匹配可选的数字和后面的空白字符（处理每个条目开头的序号）
+                        // (.*) - 捕获玩家名称（匹配冒号前任意字符）
+                        // :\s* - 匹配冒号和后面的空白
+                        // ([a-f0-9]{32}|765611\d{10,}) - 捕获玩家ID (32位HEX 或 SteamID64)
+                        const regex = /\d*\s*(.*):\s*([a-f0-9]{32}|765611\d{10,})/;
 
-                         const match = entry.match(regex); // 使用 match() 查找一次匹配
+                        const match = entry.match(regex); // 使用 match() 查找一次匹配
 
-                         if (match && match[1] && match[2]) {
-                             const playerName = match[1].trim(); // 提取并清理玩家名称 (第1个捕获组)
-                             const playerUid = match[2];       // 提取玩家UID (第2个捕获组)
+                        if (match && match[1] && match[2]) {
+                            const playerName = match[1].trim(); // 提取并清理玩家名称 (第1个捕获组)
+                            const playerUid = match[2];       // 提取玩家UID (第2个捕获组)
 
-                             // 将 UID 作为键，玩家名称作为值存入 Map
-                             playerNamesMap.set(playerUid, playerName);
-                         }
+                            // 将 UID 作为键，玩家名称作为值存入 Map
+                            playerNamesMap.set(playerUid, playerName);
+                        }
                     });
                 });
 
@@ -799,26 +799,26 @@ export function apply(ctx: Context, config: Config) {
                 // 构建要发送的在线管理员名称列表
                 const onlineAdminNamesList: string[] = [];
                 if (onlineAdminsUids.length > 0) {
-                     onlineAdminsUids.forEach((adminUid, index) => {
-                         // 从 playerNamesMap 中查找对应的玩家名称
-                         const playerName = playerNamesMap.get(adminUid);
-                         if (playerName) {
-                              // 格式化为 "序号. 玩家名称"
-                             onlineAdminNamesList.push(`${index + 1}. ${playerName}`);
-                         } else {
-                             // 如果因为某种原因这个管理员的名称没在玩家列表里找到（理论上不可能，保险起见）
-                             onlineAdminNamesList.push(`${index + 1}. Unknown Player (ID: ${adminUid})`);
-                         }
-                     });
+                    onlineAdminsUids.forEach((adminUid, index) => {
+                        // 从 playerNamesMap 中查找对应的玩家名称
+                        const playerName = playerNamesMap.get(adminUid);
+                        if (playerName) {
+                            // 格式化为 "序号. 玩家名称"
+                            onlineAdminNamesList.push(`${index + 1}. ${playerName}`);
+                        } else {
+                            // 如果因为某种原因这个管理员的名称没在玩家列表里找到（理论上不可能，保险起见）
+                            onlineAdminNamesList.push(`${index + 1}. Unknown Player (ID: ${adminUid})`);
+                        }
+                    });
 
-                     const outputString = onlineAdminNamesList.join('\n');
+                    const outputString = onlineAdminNamesList.join('\n');
 
-                     // 打印日志，包含在线管理员名称列表
-                     // 注意：这里日志和发送的内容都是格式化好的 "序号. 玩家名称" 列表
-                     logger.info(`在线管理员：\n${outputString}`);
+                    // 打印日志，包含在线管理员名称列表
+                    // 注意：这里日志和发送的内容都是格式化好的 "序号. 玩家名称" 列表
+                    logger.info(`在线管理员：\n${outputString}`);
 
-                     // 向 session 返回在线管理员的名称列表
-                     session.send(outputString);
+                    // 向 session 返回在线管理员的名称列表
+                    session.send(outputString);
                 } else {
                     // 如果 onlineAdminsUids 数组为空，说明没有找到在线的管理员
                     const noAdminsMessage = "没有在线的管理员。";
@@ -887,18 +887,23 @@ export function apply(ctx: Context, config: Config) {
                 if (player[0]?.issuspicious && !onlinesuspicious.includes(uid)) {
                     //logger.info(`可疑玩家 ${uid} 在 ${server.name} 上线`)
                     const d = new Date()
-                    ctx.bots.find(bot => bot.selfId === config.botid)?.sendMessage(config.sendto, `可疑玩家 ${uid} 在${d.toDateString()} ${d.toLocaleTimeString()} 上线`)
+                    ctx.bots.find(bot => bot.selfId === config.botid)?.sendMessage(config.sendto, `可疑玩家 ${player[0].playerName} (${uid}) 在${d.toDateString()} ${d.toLocaleTimeString()} 上线
+                    服务器：${server.name}`)
                     onlinesuspicious.push(uid)
                 }
             }
-            onlinesuspicious.forEach(online => {
+            const previouslyOnlineSuspicious = [...onlinesuspicious]; // 复制一份用于迭代，或者你可以直接用 onlinesuspicious.filter(...) 并赋值回 onlinesuspicious
+            onlinesuspicious = previouslyOnlineSuspicious.filter(async online => {
                 if (!playerUids.includes(online)) {
-                    //logger.info(`可疑玩家 ${online} 下线`)
+                    // logger.info(`可疑玩家 ${online} 下线`)
                     const d = new Date()
-                    ctx.bots.find(bot => bot.selfId === config.botid)?.sendMessage(config.sendto, `可疑玩家 ${online} 在${d.toDateString()} ${d.toLocaleTimeString()} 下线`)
-                    onlinesuspicious.splice(onlinesuspicious.indexOf(online), 1)
+                    const player = await ctx.database.get('player_stats', { uid: online });
+                    ctx.bots.find(bot => bot.selfId === config.botid)?.sendMessage(config.sendto, `可疑玩家 ${player[0].playerName} (${online}) 在${d.toDateString()} ${d.toLocaleTimeString()} 下线
+        服务器：${server.name}`)
+                    return false; // 如果玩家已下线，不包含在新数组中
                 }
-            })
+                return true; // 如果玩家还在，包含在新数组中
+            });
         })
     }, 60_000)
 }
