@@ -770,22 +770,21 @@ export function apply(ctx: Context, config: Config) {
 
                 conn.send('Get AdminIds');
                 const AdminIdsResponse = (await conn.receive()).toString();
+                //logger.info(AdminIdsResponse);
                 const lines = AdminIdsResponse.split('\n').filter(line => line.trim() !== '');
                 // 使用 flatMap 处理每一行，提取 ID
                 const adminIds = lines.flatMap(line => {
-                    // 使用一个或多个空白字符分割行
-                    const parts = line.split(/\s+/).filter(part => part !== '');
-                    if (parts.length < 2) {
-                        // 如果分割后元素少于2个，说明格式有问题，跳过此行
-                        return [];
-                    }
-                    const idsInLine = [];
-                    // 从第二个元素（索引1）开始，每隔3个元素就是ID
-                    // 数据格式是: 计数 ID 角色 名称 ID 角色 名称 ...
-                    for (let i = 1; i < parts.length; i += 3) {
-                        idsInLine.push(parts[i]);
-                    }
-                    return idsInLine;
+                    // 1. 首先使用制表符分隔行，获取每个管理员的字符串
+                    const adminStrings = line.split('\t');
+                
+                    // 2. 处理每个管理员字符串，分割其内部的id、角色、备注
+                    return adminStrings.map(adminStr => {
+                        // 使用一个或多个空白字符分隔，并过滤掉可能产生的空字符串
+                        const parts = adminStr.split(/\s+/).filter(part => part !== '');
+                        return parts; // 返回分割后的部分
+                    })
+                    .filter(parts => parts.length >= 3) // 3. 过滤掉那些分割后不足3项的（即不包含id、角色、备注全部的）
+                    .map(parts => parts[0]); // 4. 从剩余有效的项中，提取第一个元素（即ID）
                 });
                 // *** 获取 AdminIds 代码结束 ***
 
