@@ -8,7 +8,7 @@ export const name = 'multi-rcon-hll'
 export const reusable = true
 export const inject = ['database']
 const logger = new Logger(name)
-let onlinesuspicious: Array<string> = []
+
 
 export interface Config {
     botid: string
@@ -211,6 +211,7 @@ export class HLLConnection {
 }
 
 export function apply(ctx: Context, config: Config) {
+    let onlinesuspicious: Array<string> = []
 
     ctx.model.extend('vip_data', {
         id: 'unsigned', uid: 'string', serverId: 'string',
@@ -776,15 +777,15 @@ export function apply(ctx: Context, config: Config) {
                 const adminIds = lines.flatMap(line => {
                     // 1. 首先使用制表符分隔行，获取每个管理员的字符串
                     const adminStrings = line.split('\t');
-                
+
                     // 2. 处理每个管理员字符串，分割其内部的id、角色、备注
                     return adminStrings.map(adminStr => {
                         // 使用一个或多个空白字符分隔，并过滤掉可能产生的空字符串
                         const parts = adminStr.split(/\s+/).filter(part => part !== '');
                         return parts; // 返回分割后的部分
                     })
-                    .filter(parts => parts.length >= 3) // 3. 过滤掉那些分割后不足3项的（即不包含id、角色、备注全部的）
-                    .map(parts => parts[0]); // 4. 从剩余有效的项中，提取第一个元素（即ID）
+                        .filter(parts => parts.length >= 3) // 3. 过滤掉那些分割后不足3项的（即不包含id、角色、备注全部的）
+                        .map(parts => parts[0]); // 4. 从剩余有效的项中，提取第一个元素（即ID）
                 });
                 // *** 获取 AdminIds 代码结束 ***
 
@@ -865,46 +866,76 @@ export function apply(ctx: Context, config: Config) {
             }
         }
     }, 3600_000)
-    //每一分钟查询可疑玩家是否在线
-    ctx.setInterval(async () => {
-        config.servers.forEach(async server => {
-            const conn = new HLLConnection();
-            await conn.connect(server.host, server.port, server.password);
-            conn.send('Get PlayerIds')
-            const playerIdsResponse = (await conn.receive()).toString();
-            const playerLines = playerIdsResponse.split('\n');
-            const playerUids: string[] = [];
-            playerLines.forEach(line => {
-                line = line.trim();
-                if (line === '') return;
-                const lineWithoutNumber = line.replace(/^\d+\s*/, '');
-                const regex = /(?:.*?):\s*([a-f0-9]{32}|765611\d{10,})/g;
-                let match: string[];
-                while ((match = regex.exec(lineWithoutNumber)) !== null) { if (match[1]) playerUids.push(match[1]); }
-            });
-            for (const uid of playerUids) {
-                //检查是否为可疑玩家
+
+ctx.setInterval(async () => {
+    const server = config.servers[0]; // assuming only one server
+
+    try {
+        const conn = new HLLConnection();
+        await conn.connect(server.host, server.port, server.password);
+        conn.send('Get PlayerIds');
+        const playerIdsResponse = (await conn.receive()).toString();
+        conn.close();
+
+        const playerLines = playerIdsResponse.split('\n');
+        const currentScanPlayerUids: string[] = [];
+        playerLines.forEach(line => {
+            line = line.trim();
+            if (line === '') return;
+            const lineWithoutNumber = line.replace(/^\d+\s*/, '');
+            const regex = /(?:.*?):\s*([a-f0-9]{32}|765611\d{10,})/g;
+            let match: string[];
+             while ((match = regex.exec(lineWithoutNumber)) !== null) {
+                 if (match[1]) currentScanPlayerUids.push(match[1]);
+             }
+        });
+
+        const nextOnlineSuspicious: string[] = [];
+
+        for (const uid of currentScanPlayerUids) {
+            const isAlreadyTrackedSuspicious = onlinesuspicious.includes(uid);
+
+            if (isAlreadyTrackedSuspicious) {
+                nextOnlineSuspicious.push(uid);
+            } else {
                 const player = await ctx.database.get('player_stats', { uid: uid });
-                if (player[0]?.issuspicious && !onlinesuspicious.includes(uid)) {
-                    //logger.info(`可疑玩家 ${uid} 在 ${server.name} 上线`)
-                    const d = new Date()
-                    ctx.bots.find(bot => bot.selfId === config.botid)?.sendMessage(config.sendto, `可疑玩家 ${player[0].playerName} (${uid}) 在${d.toDateString()} ${d.toLocaleTimeString()} 上线
-                    服务器：${server.name}`)
-                    onlinesuspicious.push(uid)
+                if (player && player[0]?.issuspicious) {
+                    nextOnlineSuspicious.push(uid);
+                    const d = new Date();
+                    const playerName = (player && player[0]?.playerName) || '未知玩家名';
+                     const bot = ctx.bots.find(bot => bot.selfId === config.botid);
+                     if (bot) {
+                         await bot.sendMessage(config.sendto, `可疑玩家 ${playerName} (${uid}) 在${d.toDateString()} ${d.toLocaleTimeString()} 上线\n服务器：${server.name}`).catch(err => console.error(`发送上线消息失败给 ${uid}:`, err));
+                     } else {
+                          console.error(`未找到 Bot ID: ${config.botid} 发送上线消息`);
+                     }
                 }
             }
-            const previouslyOnlineSuspicious = [...onlinesuspicious]; // 复制一份用于迭代，或者你可以直接用 onlinesuspicious.filter(...) 并赋值回 onlinesuspicious
-            onlinesuspicious = previouslyOnlineSuspicious.filter(async online => {
-                if (!playerUids.includes(online)) {
-                    // logger.info(`可疑玩家 ${online} 下线`)
-                    const d = new Date()
-                    const player = await ctx.database.get('player_stats', { uid: online });
-                    ctx.bots.find(bot => bot.selfId === config.botid)?.sendMessage(config.sendto, `可疑玩家 ${player[0].playerName} (${online}) 在${d.toDateString()} ${d.toLocaleTimeString()} 下线
-        服务器：${server.name}`)
-                    return false; // 如果玩家已下线，不包含在新数组中
-                }
-                return true; // 如果玩家还在，包含在新数组中
-            });
-        })
-    }, 60_000)
+        }
+
+        const previouslyOnlineSuspiciousSet = new Set(onlinesuspicious);
+        const currentScanPlayerUidsSet = new Set(currentScanPlayerUids);
+
+        const newlyOfflineSuspicious = [...previouslyOnlineSuspiciousSet].filter(uid => !currentScanPlayerUidsSet.has(uid));
+
+        for (const uid of newlyOfflineSuspicious) {
+             const d = new Date();
+             const player = await ctx.database.get('player_stats', { uid: uid });
+
+             const bot = ctx.bots.find(bot => bot.selfId === config.botid);
+             if (bot) {
+                 const playerName = (player && player[0]?.playerName) || '未知玩家名';
+                 await bot.sendMessage(config.sendto, `可疑玩家 ${playerName} (${uid}) 在${d.toDateString()} ${d.toLocaleTimeString()} 下线`).catch(err => console.error(`发送下线消息失败给 ${uid}:`, err));
+             } else {
+                  console.error(`未找到 Bot ID: ${config.botid} 发送下线消息`);
+             }
+        }
+
+        onlinesuspicious = nextOnlineSuspicious;
+
+    } catch (error) {
+        console.error(`处理服务器 ${server.name} 出错:`, error);
+    }
+
+}, 60_000);
 }
