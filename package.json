@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-multi-rcon-hll",
   "description": "一键管理多个hll服务器",
-  "version": "2.4.4",
+  "version": "2.4.5",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [

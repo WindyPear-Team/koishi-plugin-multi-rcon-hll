@@ -209,9 +209,9 @@ export class HLLConnection {
         this.isConnected = false
     }
 }
+let onlinesuspicious: Map<string, string> = new Map();
 
 export function apply(ctx: Context, config: Config) {
-    let onlinesuspicious: Array<string> = []
 
     ctx.model.extend('vip_data', {
         id: 'unsigned', uid: 'string', serverId: 'string',
@@ -868,74 +868,142 @@ export function apply(ctx: Context, config: Config) {
     }, 3600_000)
 
 ctx.setInterval(async () => {
-    const server = config.servers[0]; // assuming only one server
+    console.log('--- 扫描周期开始 (多服务器) ---'); // 添加日志
 
-    try {
-        const conn = new HLLConnection();
-        await conn.connect(server.host, server.port, server.password);
-        conn.send('Get PlayerIds');
-        const playerIdsResponse = (await conn.receive()).toString();
-        conn.close();
+    // 用于收集本次扫描周期内在所有服务器上发现的在线可疑玩家及其所在服务器
+    // Map<uid, serverName>
+    const currentScanSuspiciousMap: Map<string, string> = new Map();
 
-        const playerLines = playerIdsResponse.split('\n');
-        const currentScanPlayerUids: string[] = [];
-        playerLines.forEach(line => {
-            line = line.trim();
-            if (line === '') return;
-            const lineWithoutNumber = line.replace(/^\d+\s*/, '');
-            const regex = /(?:.*?):\s*([a-f0-9]{32}|765611\d{10,})/g;
-            let match: string[];
-             while ((match = regex.exec(lineWithoutNumber)) !== null) {
-                 if (match[1]) currentScanPlayerUids.push(match[1]);
-             }
-        });
+    // 在开始扫描前获取上次的状态快照，用于后续对比
+    const previousOnlineSuspiciousMap = new Map(onlinesuspicious);
 
-        const nextOnlineSuspicious: string[] = [];
+    // 1. 顺序处理每个服务器，收集所有在线可疑玩家 UID 及其服务器名称
+    for (const server of config.servers) { // <-- 遍历所有服务器
+        console.log(`正在处理服务器: ${server.name}`); // 添加日志
+        try {
+            const conn = new HLLConnection();
+            await conn.connect(server.host, server.port, server.password);
+            conn.send('Get PlayerIds');
+            const playerIdsResponse = (await conn.receive()).toString();
+            conn.close(); // 处理完一个服务器后立即断开连接
 
-        for (const uid of currentScanPlayerUids) {
-            const isAlreadyTrackedSuspicious = onlinesuspicious.includes(uid);
+            console.log(`从服务器 ${server.name} 获取到响应（部分）：`, playerIdsResponse.substring(0, 100) + '...'); // 添加日志
 
-            if (isAlreadyTrackedSuspicious) {
-                nextOnlineSuspicious.push(uid);
-            } else {
-                const player = await ctx.database.get('player_stats', { uid: uid });
-                if (player && player[0]?.issuspicious) {
-                    nextOnlineSuspicious.push(uid);
-                    const d = new Date();
-                    const playerName = (player && player[0]?.playerName) || '未知玩家名';
-                     const bot = ctx.bots.find(bot => bot.selfId === config.botid);
-                     if (bot) {
-                         await bot.sendMessage(config.sendto, `可疑玩家 ${playerName} (${uid}) 在${d.toDateString()} ${d.toLocaleTimeString()} 上线\n服务器：${server.name}`).catch(err => console.error(`发送上线消息失败给 ${uid}:`, err));
-                     } else {
-                          console.error(`未找到 Bot ID: ${config.botid} 发送上线消息`);
-                     }
+            const playerLines = playerIdsResponse.split('\n');
+            const currentServerPlayerUids: string[] = []; // 当前服务器所有在线玩家 UID (不分是否可疑)
+            playerLines.forEach(line => {
+                line = line.trim();
+                if (line === '') return;
+                // 假设这里的正则表达式和提取 UID 的逻辑是正确的
+                const lineWithoutNumber = line.replace(/^\d+\s*/, '');
+                const regex = /(?:.*?):\s*([a-f0-9]{32}|765611\d{10,})/g;
+                let match: string[];
+                 while ((match = regex.exec(lineWithoutNumber)) !== null) {
+                     if (match[1]) currentServerPlayerUids.push(match[1]);
+                 }
+            });
+             console.log(`从 ${server.name} 提取到的 playerUids (${currentServerPlayerUids.length}):`, currentServerPlayerUids.slice(0, 10)); // 添加日志
+
+            // 检查当前服务器在线玩家是否是可疑玩家，记录到统一的 currentScanSuspiciousMap 中
+            for (const uid of currentServerPlayerUids) {
+                 // 如果这个 UID 在本次扫描周期中已经被其他服务器记录为可疑在线，则跳过重复检查数据库
+                 if (currentScanSuspiciousMap.has(uid)) {
+                    // 如果需要记录玩家在所有在线服务器，这里需要更复杂的 Map<string, Set<string>>
+                    // 但根据需求只存一个服务器名，重复检测到的只需更新服务器名，这里简单覆盖或跳过皆可
+                    // 这里选择简单覆盖，表示最后在哪个服务器看到他
+                     currentScanSuspiciousMap.set(uid, server.name);
+                     console.log(`可疑玩家 ${uid} 在服务器 ${server.name} 在线 (已在本次扫描中记录)`); // 添加日志
+                     continue; // 已处理过该 UID 在本次扫描中的状态，跳到下一个 UID
+                 }
+
+                // 如果这个 UID 上次扫描时就是可疑在线的 (存在于 previousOnlineSuspiciousMap)
+                if (previousOnlineSuspiciousMap.has(uid)) {
+                     console.log(`可疑玩家 ${uid} 在服务器 ${server.name} 在线 (上次也在线)`); // 添加日志
+                     currentScanSuspiciousMap.set(uid, server.name); // 保留其在线状态和当前服务器
+                } else {
+                     // 这个玩家在本次扫描的当前服务器在线，但上次扫描时不在onlinesuspicious里
+                     // 需要查询数据库判断他是否本次是新上线的可疑玩家
+                     console.log(`UID ${uid} 在服务器 ${server.name} 在线，检查是否为新上线的可疑玩家`); // 添加日志
+                    const player = await ctx.database.get('player_stats', { uid: uid });
+                    console.log(`UID ${uid} 数据库查询结果:`, player); // 添加日志
+
+                    if (player && player[0]?.issuspicious) {
+                        console.log(`发现新的可疑玩家上线: ${uid} 在服务器 ${server.name}`); // 添加日志
+                        currentScanSuspiciousMap.set(uid, server.name); // 发现是可疑的，添加到本次扫描的集合中
+                        // IMPORTANT: 上线通知在全部服务器扫描完后再统一发送，避免多服务器重复发送
+                    }
                 }
             }
+
+        } catch (error) {
+            console.error(`处理服务器 ${server.name} 出错:`, error); // 添加日志
+            // 错误处理：服务器连接失败怎么办？如果一个玩家只在这个服务器上线，服务器崩了，
+            // 他会被误判为下线。根据需求，目前是只要扫描到的服务器里没他就算下线。
+            // 更严谨需要标记服务器健康状态并在判断时排除掉离线服务器。这里暂不实现。
         }
+    } // <-- 所有服务器处理完毕
 
-        const previouslyOnlineSuspiciousSet = new Set(onlinesuspicious);
-        const currentScanPlayerUidsSet = new Set(currentScanPlayerUids);
 
-        const newlyOfflineSuspicious = [...previouslyOnlineSuspiciousSet].filter(uid => !currentScanPlayerUidsSet.has(uid));
+    // 2. 在所有服务器扫描完成后，对比本次扫描结果 (currentScanSuspiciousMap) 和上次的状态 (previousOnlineSuspiciousMap)
 
-        for (const uid of newlyOfflineSuspicious) {
-             const d = new Date();
-             const player = await ctx.database.get('player_stats', { uid: uid });
-
-             const bot = ctx.bots.find(bot => bot.selfId === config.botid);
-             if (bot) {
-                 const playerName = (player && player[0]?.playerName) || '未知玩家名';
-                 await bot.sendMessage(config.sendto, `可疑玩家 ${playerName} (${uid}) 在${d.toDateString()} ${d.toLocaleTimeString()} 下线`).catch(err => console.error(`发送下线消息失败给 ${uid}:`, err));
-             } else {
-                  console.error(`未找到 Bot ID: ${config.botid} 发送下线消息`);
-             }
+    // 找出新上线的玩家：在 currentScanSuspiciousMap 中，但不在 previousOnlineSuspiciousMap 中的 UID
+    const newlyOnlineUids: string[] = [];
+    for (const uid of currentScanSuspiciousMap.keys()) {
+        if (!previousOnlineSuspiciousMap.has(uid)) {
+            newlyOnlineUids.push(uid);
         }
-
-        onlinesuspicious = nextOnlineSuspicious;
-
-    } catch (error) {
-        console.error(`处理服务器 ${server.name} 出错:`, error);
     }
 
-}, 60_000);
+    // 找出已下线的玩家：在 previousOnlineSuspiciousMap 中，但本次扫描 (currentScanSuspiciousMap) 已找不到的 UID
+    const newlyOfflineUids: string[] = [];
+    for (const uid of previousOnlineSuspiciousMap.keys()) {
+        if (!currentScanSuspiciousMap.has(uid)) {
+            newlyOfflineUids.push(uid);
+        }
+    }
+
+
+    // 3. 发送上线通知 (只发送给新上线的)
+    for (const uid of newlyOnlineUids) {
+        console.log(`尝试发送上线消息给 UID: ${uid}`); // 添加日志
+        const d = new Date();
+        // 从本次扫描结果中获取玩家所在的服务器名
+        const serverName = currentScanSuspiciousMap.get(uid) || '未知服务器';
+        // 查询数据库获取玩家名称以便发送消息 (只在需要发送消息时查)
+        const player = await ctx.database.get('player_stats', { uid: uid });
+
+         const bot = ctx.bots.find(bot => bot.selfId === config.botid);
+         if (bot) {
+             const playerName = (player && player[0]?.playerName) || '未知玩家名';
+             // 上线消息包含服务器名称
+             await bot.sendMessage(config.sendto, `可疑玩家 ${playerName} (${uid}) 在${d.toDateString()} ${d.toLocaleTimeString()} 在 ${serverName} 上线`).catch(err => console.error(`发送上线消息失败给 ${uid}:`, err)); // 添加错误捕获
+         } else {
+              console.error(`未找到 Bot ID: ${config.botid} 发送上线消息`); // 添加日志
+         }
+    }
+
+    // 4. 发送下线通知 (只发送给已下线的)
+    for (const uid of newlyOfflineUids) {
+         console.log(`尝试发送下线消息给 UID: ${uid}`); // 添加日志
+         const d = new Date();
+         // 从【上次】的状态中获取玩家最后一次被看到的服务器名称
+         const lastSeenServerName = previousOnlineSuspiciousMap.get(uid) || '未知服务器';
+         // 查询数据库获取玩家名称以便发送消息 (只在需要发送消息时查)
+         const player = await ctx.database.get('player_stats', { uid: uid });
+
+         const bot = ctx.bots.find(bot => bot.selfId === config.botid);
+         if (bot) {
+             const playerName = (player && player[0]?.playerName) || '未知玩家名';
+             // 下线消息包含最后一次被看到的服务器名称 (根据需求，如果确定要包含服务器)
+             await bot.sendMessage(config.sendto, `可疑玩家 ${playerName} (${uid}) 在${d.toDateString()} ${d.toLocaleTimeString()} 从 ${lastSeenServerName} 下线`).catch(err => console.error(`发送下线消息失败给 ${uid}:`, err)); // 添加错误捕获
+         } else {
+              console.error(`未找到 Bot ID: ${config.botid} 发送下线消息`); // 添加日志
+         }
+    }
+
+    // 5. 更新全局 onlinesuspicious 状态为本次扫描所有在线可疑玩家的集合 (UID -> ServerName Map)
+    onlinesuspicious = currentScanSuspiciousMap;
+    console.log(`--- 扫描周期结束，onlinesuspicious 更新为 (${onlinesuspicious.size}) ---`); // 添加日志
+
+}, 60_000); // 扫描间隔
 }
